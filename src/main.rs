@@ -20,61 +20,59 @@ fn main() {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct SplineApp {
+    params: Params,
+    #[serde(skip)]
+    output: Output,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct Params {
     control_points: Vec<Pos2>,
     num_line_segments: u32,
-    curve_points: Vec<Pos2>,
-    distance_table: Vec<f32>,
     animate_constant_speed: bool,
     bernstein: bool,
-
     show_lerp_lines: bool,
     show_lerp_points: bool,
     show_last_lerp_point: bool,
-    animate_u: bool,
+    animate: bool,
     animate_curve: bool,
-    animate_curve_idx: usize,
+
     animate_direction: f32,
     u: f32,
+}
+
+#[derive(Clone, Debug, Default)]
+struct Output {
+    curve_points: Vec<Pos2>,
+    distance_table: Vec<f32>,
+    animate_curve_idx: usize,
     constant_speed_u: f32,
-    #[serde(default)]
     lerp_points: Vec<Vec<Pos2>>,
 }
 
 impl Default for SplineApp {
     fn default() -> Self {
-        let bernstein = false;
-        let control_points = vec![
-            Pos2::new(100.0, 400.0),
-            Pos2::new(150.0, 100.0),
-            Pos2::new(550.0, 100.0),
-            Pos2::new(600.0, 400.0),
-        ];
-        let num_line_segments = 50;
-        let curve_points = compute_points(&control_points, num_line_segments, bernstein);
-        let distance_table = compute_distance_table(&curve_points);
-
-        let u = 0.3;
-        let animate_curve_idx = find_last_line_idx(u, &curve_points);
-        let constant_speed_u = constant_speed_u(u, &distance_table);
-        let lerp_points = compute_lerp_points(u, &control_points);
-        Self {
-            control_points,
+        let params = Params {
+            control_points: vec![
+                Pos2::new(100.0, 400.0),
+                Pos2::new(150.0, 100.0),
+                Pos2::new(550.0, 100.0),
+                Pos2::new(600.0, 400.0),
+            ],
+            bernstein: false,
             num_line_segments: 50,
-            curve_points,
-            distance_table,
-            bernstein,
             show_lerp_lines: true,
             show_lerp_points: true,
             show_last_lerp_point: true,
-            animate_u: false,
-            animate_curve: false,
-            animate_curve_idx,
+            animate: false,
             animate_constant_speed: false,
+            animate_curve: false,
+
             animate_direction: 1.0,
-            u,
-            constant_speed_u,
-            lerp_points,
-        }
+            u: 0.3,
+        };
+        let output = compute(&params);
+        Self { params, output }
     }
 }
 
@@ -104,49 +102,52 @@ impl eframe::App for SplineApp {
             .resizable(false)
             .exact_width(400.0)
             .show(ctx, |ui| {
-                changed |= ui.checkbox(&mut self.bernstein, "bernstein").changed();
+                let params = &mut self.params;
+
+                changed |= ui.checkbox(&mut params.bernstein, "bernstein").changed();
                 ui.add_space(30.0);
                 ui.label("line segments");
                 changed |= ui
-                    .add(DragValue::new(&mut self.num_line_segments).clamp_range(1..=1000))
+                    .add(DragValue::new(&mut params.num_line_segments).clamp_range(1..=1000))
                     .changed();
 
                 ui.add_space(30.0);
                 ui.horizontal(|ui| {
-                    if ui.button("-").clicked() && self.control_points.len() > 2 {
-                        let mid = (self.control_points.len() - 1) / 2;
-                        self.control_points.remove(mid);
+                    if ui.button("-").clicked() && params.control_points.len() > 2 {
+                        let mid = (params.control_points.len() - 1) / 2;
+                        params.control_points.remove(mid);
                         changed = true;
                     }
 
                     if ui.button("+").clicked() {
-                        let mid = (self.control_points.len() - 1) / 2;
+                        let mid = (params.control_points.len() - 1) / 2;
                         let mid_point =
-                            self.control_points[mid].lerp(self.control_points[mid + 1], 0.5);
-                        self.control_points.insert(mid + 1, mid_point);
+                            params.control_points[mid].lerp(params.control_points[mid + 1], 0.5);
+                        params.control_points.insert(mid + 1, mid_point);
                         changed = true;
                     }
                 });
 
                 ui.add_space(30.0);
-                ui.checkbox(&mut self.show_lerp_lines, "show construction lines");
-                ui.checkbox(&mut self.show_lerp_points, "show construction points");
-                ui.checkbox(&mut self.show_last_lerp_point, "show animated point");
-                ui.checkbox(&mut self.animate_u, "animate");
-                ui.checkbox(&mut self.animate_curve, "animate curve");
-                ui.checkbox(&mut self.animate_constant_speed, "constant speed");
+                ui.checkbox(&mut params.show_lerp_lines, "show construction lines");
+                ui.checkbox(&mut params.show_lerp_points, "show construction points");
+                ui.checkbox(&mut params.show_last_lerp_point, "show animated point");
+                ui.checkbox(&mut params.animate, "animate");
+                ui.checkbox(&mut params.animate_curve, "animate curve");
+                ui.checkbox(&mut params.animate_constant_speed, "constant speed");
                 ui.label("u");
 
-                let slider = Slider::new(&mut self.u, 0.0..=1.0)
+                let slider = Slider::new(&mut params.u, 0.0..=1.0)
                     .fixed_decimals(4)
                     .drag_value_speed(0.002);
                 changed |= ui.add(slider).changed();
 
-                let slider = Slider::new(&mut self.constant_speed_u, 0.0..=1.0).fixed_decimals(4);
+                let slider =
+                    Slider::new(&mut self.output.constant_speed_u, 0.0..=1.0).fixed_decimals(4);
                 ui.add_enabled(false, slider);
 
                 ui.add_space(30.0);
-                for (i, p) in self.control_points.iter().enumerate() {
+                for (i, p) in params.control_points.iter().enumerate() {
                     ui.horizontal(|ui| {
                         ui.label(format!("{i}"));
 
@@ -159,10 +160,12 @@ impl eframe::App for SplineApp {
         CentralPanel::default()
             .frame(Frame::none().fill(Color32::from_gray(0x20)))
             .show(ctx, |ui| {
+                let params = &mut self.params;
+
                 let clamp_margin = Vec2::splat(control_point_radius);
                 let clamp_min = clamp_margin.to_pos2();
                 let clamp_max = (ui.available_size() - clamp_margin).to_pos2();
-                for (i, pos) in self.control_points.iter_mut().enumerate() {
+                for (i, pos) in params.control_points.iter_mut().enumerate() {
                     let rect = Rect::from_center_size(*pos, Vec2::splat(2.0 * point_radius));
                     let resp = ui.interact(rect, Id::new("control_point").with(i), Sense::drag());
                     if resp.dragged() {
@@ -175,66 +178,53 @@ impl eframe::App for SplineApp {
                     *pos = pos.clamp(clamp_min, clamp_max);
                 }
 
-                if self.animate_u {
+                if params.animate {
                     // force refresh when animating
                     ui.ctx().request_repaint();
 
                     let delta = ui.input(|i| i.stable_dt) / 2.5;
-                    self.u += self.animate_direction * delta;
-                    self.u = self.u.clamp(0.0, 1.0);
+                    params.u += params.animate_direction * delta;
+                    params.u = params.u.clamp(0.0, 1.0);
 
-                    if self.u == 1.0 {
-                        self.animate_direction = -1.0;
-                    } else if self.u == 0.0 {
-                        self.animate_direction = 1.0;
+                    if params.u == 1.0 {
+                        params.animate_direction = -1.0;
+                    } else if params.u == 0.0 {
+                        params.animate_direction = 1.0;
                     }
                     changed = true;
                 }
 
                 if changed {
-                    self.curve_points = compute_points(
-                        &self.control_points,
-                        self.num_line_segments,
-                        self.bernstein,
-                    );
-
-                    self.distance_table = compute_distance_table(&self.curve_points);
-                    self.constant_speed_u = constant_speed_u(self.u, &self.distance_table);
-                    let u = if self.animate_constant_speed {
-                        self.constant_speed_u
-                    } else {
-                        self.u
-                    };
-                    self.animate_curve_idx = find_last_line_idx(u, &self.curve_points);
-                    self.lerp_points = compute_lerp_points(u, &self.control_points);
+                    self.output = compute(params);
                 }
 
+                let out = &self.output;
                 let painter = ui.painter();
 
                 // curve
                 let curve_stroke = Stroke::new(3.0, Color32::GREEN);
-                if !self.animate_curve {
-                    for p in self.curve_points.windows(2) {
+                if !params.animate_curve {
+                    for p in out.curve_points.windows(2) {
                         painter.line_segment([p[0], p[1]], curve_stroke);
                     }
                 } else {
-                    for p in self.curve_points[0..=self.animate_curve_idx].windows(2) {
+                    for p in out.curve_points[0..=out.animate_curve_idx].windows(2) {
                         painter.line_segment([p[0], p[1]], curve_stroke);
                     }
-                    let last_point = self.curve_points[self.animate_curve_idx];
-                    let lerp_point = self.lerp_points[self.lerp_points.len() - 1][0];
+                    let last_point = out.curve_points[out.animate_curve_idx];
+                    let lerp_point = out.lerp_points[out.lerp_points.len() - 1][0];
                     painter.line_segment([last_point, lerp_point], curve_stroke);
                 }
 
                 // control point lines
-                for p in self.control_points.windows(2) {
+                for p in params.control_points.windows(2) {
                     let stroke = Stroke::new(2.0, Color32::BLUE);
                     painter.line_segment([p[0], p[1]], stroke);
                 }
 
                 // interpolated points
-                for points in self.lerp_points.iter() {
-                    if self.show_lerp_lines {
+                for points in out.lerp_points.iter() {
+                    if params.show_lerp_lines {
                         for p in points.windows(2) {
                             let stroke = Stroke::new(1.0, Color32::LIGHT_BLUE);
                             painter.line_segment([p[0], p[1]], stroke);
@@ -242,11 +232,11 @@ impl eframe::App for SplineApp {
                     }
 
                     if points.len() == 1 {
-                        if self.show_last_lerp_point {
+                        if params.show_last_lerp_point {
                             let color = Color32::from_rgb(0xF0, 0x20, 0xF0);
                             painter.circle_filled(points[0], point_radius, color);
                         }
-                    } else if self.show_lerp_points {
+                    } else if params.show_lerp_points {
                         for p in points.iter() {
                             painter.circle_filled(*p, point_radius, Color32::GOLD);
                         }
@@ -254,7 +244,7 @@ impl eframe::App for SplineApp {
                 }
 
                 // control points
-                for (i, p) in self.control_points.iter().enumerate() {
+                for (i, p) in params.control_points.iter().enumerate() {
                     painter.circle_filled(*p, control_point_radius, Color32::RED);
                     let font = FontId::new(1.5 * control_point_radius, FontFamily::Proportional);
                     painter.text(
@@ -266,6 +256,31 @@ impl eframe::App for SplineApp {
                     );
                 }
             });
+    }
+}
+
+fn compute(params: &Params) -> Output {
+    let curve_points = compute_points(
+        &params.control_points,
+        params.num_line_segments,
+        params.bernstein,
+    );
+    let distance_table = compute_distance_table(&curve_points);
+
+    let constant_speed_u = constant_speed_u(params.u, &distance_table);
+    let u = if params.animate_constant_speed {
+        constant_speed_u
+    } else {
+        params.u
+    };
+    let lerp_points = compute_lerp_points(u, &params.control_points);
+    let animate_curve_idx = find_last_line_idx(u, &curve_points);
+    Output {
+        curve_points,
+        distance_table,
+        animate_curve_idx,
+        constant_speed_u,
+        lerp_points,
     }
 }
 

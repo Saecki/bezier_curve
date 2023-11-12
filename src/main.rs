@@ -51,6 +51,7 @@ impl Default for SplineApp {
             show_velocity_vector_in_plot: false,
             show_acc_vector_in_plot: false,
             animate: false,
+            animation_time: 2.5,
             wrap_animation: false,
             animate_constant_speed: false,
             animate_curve: false,
@@ -91,6 +92,7 @@ struct Params {
     show_velocity_vector_in_plot: bool,
     show_acc_vector_in_plot: bool,
     animate: bool,
+    animation_time: f32,
     wrap_animation: bool,
     animate_curve: bool,
 
@@ -171,7 +173,7 @@ impl eframe::App for SplineApp {
                     // force refresh when animating
                     ui.ctx().request_repaint();
 
-                    let delta = ui.input(|i| i.stable_dt) / 2.5;
+                    let delta = ui.input(|i| i.stable_dt) / params.animation_time;
                     params.u += params.movement_direction * delta;
                     params.u = params.u.clamp(0.0, 1.0);
 
@@ -301,6 +303,14 @@ fn draw_sidebar(ui: &mut Ui, app: &mut SplineApp) -> bool {
 
     ui.add_space(10.0);
     ui.checkbox(&mut params.animate, "animate");
+    ui.horizontal(|ui| {
+        ui.add(
+            DragValue::new(&mut params.animation_time)
+                .speed(0.1)
+                .clamp_range(0.1..=100.0),
+        );
+        ui.label("animation time");
+    });
     ui.checkbox(&mut params.wrap_animation, "wrap animation");
     ui.horizontal(|ui| {
         ui.label("direction");
@@ -309,25 +319,33 @@ fn draw_sidebar(ui: &mut Ui, app: &mut SplineApp) -> bool {
     });
     ui.checkbox(&mut params.animate_curve, "animate curve");
     ui.checkbox(&mut params.animate_constant_speed, "constant speed");
-    ui.label("u");
 
-    let slider = Slider::new(&mut params.u, 0.0..=1.0)
-        .fixed_decimals(4)
-        .drag_value_speed(0.002);
-    let resp = ui.add_sized(Vec2::new(ui.available_width(), 20.0), slider);
-    if resp.changed() {
-        params.movement_direction = resp.drag_delta().x.signum();
-        changed = true;
-    }
+    ui.horizontal(|ui| {
+        let slider = Slider::new(&mut params.u, 0.0..=1.0)
+            .fixed_decimals(4)
+            .drag_value_speed(0.002);
+        let resp = ui.add(slider);
+        ui.label("u");
 
-    let slider = Slider::new(&mut app.output.constant_speed_u, 0.0..=1.0).fixed_decimals(4);
-    ui.add_enabled(false, slider);
+        if resp.changed() {
+            params.movement_direction = resp.drag_delta().x.signum();
+            changed = true;
+        }
+    });
+
+    ui.horizontal(|ui| {
+        let slider = Slider::new(&mut app.output.constant_speed_u, 0.0..=1.0).fixed_decimals(4);
+        ui.add_enabled(false, slider);
+        ui.label("u constant speed");
+    });
 
     ui.add_space(10.0);
-    ui.label("line segments");
-    changed |= ui
-        .add(DragValue::new(&mut params.num_line_segments).clamp_range(1..=1000))
-        .changed();
+    ui.horizontal(|ui| {
+        changed |= ui
+            .add(DragValue::new(&mut params.num_line_segments).clamp_range(1..=1000))
+            .changed();
+        ui.label("line segments");
+    });
 
     ui.add_space(10.0);
     ui.horizontal(|ui| {

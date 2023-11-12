@@ -3,6 +3,7 @@ use egui::{
     Align2, CentralPanel, Color32, DragValue, FontFamily, FontId, Frame, Id, Pos2, Rect, Sense,
     SidePanel, Slider, Stroke, Vec2,
 };
+use egui_plot::{Line, Plot, PlotPoints};
 use serde_derive::{Deserialize, Serialize};
 
 fn main() {
@@ -79,7 +80,8 @@ impl Default for SplineApp {
 impl SplineApp {
     fn new(cc: &CreationContext) -> Self {
         if let Some(storage) = cc.storage {
-            if let Some(app) = eframe::get_value(storage, eframe::APP_KEY) {
+            if let Some(mut app) = eframe::get_value::<SplineApp>(storage, eframe::APP_KEY) {
+                app.output = compute(&app.params);
                 return app;
             }
         }
@@ -104,7 +106,27 @@ impl eframe::App for SplineApp {
             .show(ctx, |ui| {
                 let params = &mut self.params;
 
+                ui.add_space(30.0);
+                ui.checkbox(&mut params.show_lerp_lines, "show construction lines");
+                ui.checkbox(&mut params.show_lerp_points, "show construction points");
+                ui.checkbox(&mut params.show_last_lerp_point, "show constructed point");
+                ui.checkbox(&mut params.animate, "animate");
+                ui.checkbox(&mut params.animate_curve, "animate curve");
+                ui.checkbox(&mut params.animate_constant_speed, "constant speed");
+                ui.label("u");
+
+                let slider = Slider::new(&mut params.u, 0.0..=1.0)
+                    .fixed_decimals(4)
+                    .drag_value_speed(0.002);
+                changed |= ui.add(slider).changed();
+
+                let slider =
+                    Slider::new(&mut self.output.constant_speed_u, 0.0..=1.0).fixed_decimals(4);
+                ui.add_enabled(false, slider);
+
+                ui.add_space(30.0);
                 changed |= ui.checkbox(&mut params.bernstein, "bernstein").changed();
+
                 ui.add_space(30.0);
                 ui.label("line segments");
                 changed |= ui
@@ -128,25 +150,6 @@ impl eframe::App for SplineApp {
                     }
                 });
 
-                ui.add_space(30.0);
-                ui.checkbox(&mut params.show_lerp_lines, "show construction lines");
-                ui.checkbox(&mut params.show_lerp_points, "show construction points");
-                ui.checkbox(&mut params.show_last_lerp_point, "show animated point");
-                ui.checkbox(&mut params.animate, "animate");
-                ui.checkbox(&mut params.animate_curve, "animate curve");
-                ui.checkbox(&mut params.animate_constant_speed, "constant speed");
-                ui.label("u");
-
-                let slider = Slider::new(&mut params.u, 0.0..=1.0)
-                    .fixed_decimals(4)
-                    .drag_value_speed(0.002);
-                changed |= ui.add(slider).changed();
-
-                let slider =
-                    Slider::new(&mut self.output.constant_speed_u, 0.0..=1.0).fixed_decimals(4);
-                ui.add_enabled(false, slider);
-
-                ui.add_space(30.0);
                 for (i, p) in params.control_points.iter().enumerate() {
                     ui.horizontal(|ui| {
                         ui.label(format!("{i}"));
@@ -155,6 +158,18 @@ impl eframe::App for SplineApp {
                         ui.label(format!("({x}, {y})"));
                     });
                 }
+
+                ui.add_space(30.0);
+                Plot::new("distance_table").show_axes(false).show(ui, |ui| {
+                    let values = self.output.distance_table.iter().enumerate().map(|(i, d)| {
+                        let n = self.output.distance_table.len() - 1;
+                        let x = i as f64 / n as f64;
+                        [x, *d as f64]
+                    });
+                    let points = PlotPoints::from_iter(values);
+                    let line = Line::new(points);
+                    ui.line(line);
+                });
             });
 
         CentralPanel::default()

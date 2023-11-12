@@ -36,12 +36,15 @@ impl Default for SplineApp {
                 Pos2::new(600.0, 400.0),
             ],
             num_line_segments: 50,
+            show_control_lines: true,
+            show_control_points: true,
             show_lerp_lines: true,
             show_lerp_points: true,
             show_last_lerp_point: true,
             show_velocity_vector: false,
             show_acc_vector: false,
             animate: false,
+            wrap_animation: false,
             animate_constant_speed: false,
             animate_curve: false,
 
@@ -71,12 +74,15 @@ struct Params {
     control_points: Vec<Pos2>,
     num_line_segments: u32,
     animate_constant_speed: bool,
+    show_control_lines: bool,
+    show_control_points: bool,
     show_lerp_lines: bool,
     show_lerp_points: bool,
     show_last_lerp_point: bool,
     show_velocity_vector: bool,
     show_acc_vector: bool,
     animate: bool,
+    wrap_animation: bool,
     animate_curve: bool,
 
     movement_direction: f32,
@@ -116,13 +122,21 @@ impl eframe::App for SplineApp {
             .show(ctx, |ui| {
                 let params = &mut self.params;
 
-                ui.add_space(30.0);
+                ui.add_space(20.0);
+                ui.checkbox(&mut params.show_control_lines, "show control lines");
+                ui.checkbox(&mut params.show_control_points, "show control points");
                 ui.checkbox(&mut params.show_lerp_lines, "show construction lines");
                 ui.checkbox(&mut params.show_lerp_points, "show construction points");
                 ui.checkbox(&mut params.show_last_lerp_point, "show constructed point");
                 ui.checkbox(&mut params.show_velocity_vector, "show velocity vector");
                 ui.checkbox(&mut params.show_acc_vector, "show acceleration vector");
                 ui.checkbox(&mut params.animate, "animate");
+                ui.checkbox(&mut params.wrap_animation, "wrap animation");
+                ui.horizontal(|ui| {
+                    ui.label("direction");
+                    ui.selectable_value(&mut params.movement_direction, -1.0, "-1");
+                    ui.selectable_value(&mut params.movement_direction, 1.0, "+1");
+                });
                 ui.checkbox(&mut params.animate_curve, "animate curve");
                 ui.checkbox(&mut params.animate_constant_speed, "constant speed");
                 ui.label("u");
@@ -215,9 +229,17 @@ impl eframe::App for SplineApp {
                     params.u = params.u.clamp(0.0, 1.0);
 
                     if params.u == 1.0 {
-                        params.movement_direction = -1.0;
+                        if params.wrap_animation {
+                            params.u = 0.0;
+                        } else {
+                            params.movement_direction = -1.0;
+                        }
                     } else if params.u == 0.0 {
-                        params.movement_direction = 1.0;
+                        if params.wrap_animation {
+                            params.u = 1.0;
+                        } else {
+                            params.movement_direction = 1.0;
+                        }
                     }
                     changed = true;
                 }
@@ -245,9 +267,11 @@ impl eframe::App for SplineApp {
                 }
 
                 // control point lines
-                for p in params.control_points.windows(2) {
-                    let stroke = Stroke::new(2.0, Color32::BLUE);
-                    painter.line_segment([p[0], p[1]], stroke);
+                if params.show_control_lines {
+                    for p in params.control_points.windows(2) {
+                        let stroke = Stroke::new(2.0, Color32::BLUE);
+                        painter.line_segment([p[0], p[1]], stroke);
+                    }
                 }
 
                 // vectors
@@ -287,16 +311,19 @@ impl eframe::App for SplineApp {
                 }
 
                 // control points
-                for (i, p) in params.control_points.iter().enumerate() {
-                    painter.circle_filled(*p, control_point_radius, Color32::RED);
-                    let font = FontId::new(1.5 * control_point_radius, FontFamily::Proportional);
-                    painter.text(
-                        *p,
-                        Align2::CENTER_CENTER,
-                        i.to_string(),
-                        font,
-                        Color32::WHITE,
-                    );
+                if params.show_control_points {
+                    for (i, p) in params.control_points.iter().enumerate() {
+                        painter.circle_filled(*p, control_point_radius, Color32::RED);
+                        let font =
+                            FontId::new(1.5 * control_point_radius, FontFamily::Proportional);
+                        painter.text(
+                            *p,
+                            Align2::CENTER_CENTER,
+                            i.to_string(),
+                            font,
+                            Color32::WHITE,
+                        );
+                    }
                 }
             });
     }

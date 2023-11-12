@@ -142,12 +142,16 @@ impl eframe::App for SplineApp {
             .show(ctx, |ui| {
                 let params = &mut self.params;
 
-                ui.add_space(20.0);
+                ui.add_space(5.0);
                 ui.checkbox(&mut params.show_control_lines, "show control lines");
                 ui.checkbox(&mut params.show_control_points, "show control points");
+
+                ui.add_space(10.0);
                 ui.checkbox(&mut params.show_lerp_lines, "show construction lines");
                 ui.checkbox(&mut params.show_lerp_points, "show construction points");
                 ui.checkbox(&mut params.show_last_lerp_point, "show constructed point");
+
+                ui.add_space(10.0);
                 ui.checkbox(
                     &mut params.show_velocity_vector_on_curve,
                     "show velocity vector on curve",
@@ -156,6 +160,8 @@ impl eframe::App for SplineApp {
                     &mut params.show_acc_vector_on_curve,
                     "show acceleration vector on curve",
                 );
+
+                ui.add_space(10.0);
                 ui.checkbox(&mut params.animate, "animate");
                 ui.checkbox(&mut params.wrap_animation, "wrap animation");
                 ui.horizontal(|ui| {
@@ -180,13 +186,13 @@ impl eframe::App for SplineApp {
                     Slider::new(&mut self.output.constant_speed_u, 0.0..=1.0).fixed_decimals(4);
                 ui.add_enabled(false, slider);
 
-                ui.add_space(30.0);
+                ui.add_space(10.0);
                 ui.label("line segments");
                 changed |= ui
                     .add(DragValue::new(&mut params.num_line_segments).clamp_range(1..=1000))
                     .changed();
 
-                ui.add_space(30.0);
+                ui.add_space(10.0);
                 ui.horizontal(|ui| {
                     if ui.button("-").clicked() && params.control_points.len() > 2 {
                         let mid = (params.control_points.len() - 1) / 2;
@@ -212,7 +218,7 @@ impl eframe::App for SplineApp {
                     });
                 }
 
-                ui.add_space(30.0);
+                ui.add_space(10.0);
                 ui.checkbox(
                     &mut params.show_velocity_vector_in_plot,
                     "show velocity vector in plot",
@@ -225,6 +231,8 @@ impl eframe::App for SplineApp {
                 ui.add_space(10.0);
                 Plot::new("distance_table")
                     .show_axes(false)
+                    .data_aspect(1.0)
+                    .view_aspect(1.0)
                     .legend(
                         Legend::default()
                             .background_alpha(0.5)

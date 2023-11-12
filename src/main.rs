@@ -1,7 +1,8 @@
 use eframe::{CreationContext, NativeOptions};
+use egui::emath::Rot2;
 use egui::{
-    Align2, CentralPanel, Color32, DragValue, FontFamily, FontId, Frame, Id, Key, Modifiers, Pos2,
-    Rect, Sense, SidePanel, Slider, Stroke, Vec2,
+    Align2, CentralPanel, Color32, DragValue, FontFamily, FontId, Frame, Id, Key, Modifiers,
+    Painter, Pos2, Rect, Sense, SidePanel, Slider, Stroke, Vec2,
 };
 use egui_plot::{Arrows, Corner, Legend, Line, Plot, PlotPoints, PlotUi};
 use serde_derive::{Deserialize, Serialize};
@@ -123,6 +124,7 @@ impl eframe::App for SplineApp {
         let velocity_scale = 0.1;
         let acc_scale = 0.025;
 
+        let distance_map_color = Color32::from_rgb(0xF0, 0x60, 0x80);
         let velocity_color = Color32::from_rgb(0xF0, 0xB0, 0x20);
         let acc_color = Color32::from_rgb(0x20, 0xB0, 0xF0);
 
@@ -236,13 +238,16 @@ impl eframe::App for SplineApp {
                             [x, *d as f64]
                         });
                         let points = PlotPoints::from_iter(values);
-                        let line = Line::new(points).name("distance");
+                        let line = Line::new(points)
+                            .name("1. distance map")
+                            .color(distance_map_color)
+                            .width(2.0);
                         ui.line(line);
 
                         // velocity curve
                         draw_vector_curve(
                             ui,
-                            "velocity",
+                            "2. velocity",
                             &out.velocity_curve,
                             out.current_velocity,
                             out.animate_curve_idx,
@@ -254,7 +259,7 @@ impl eframe::App for SplineApp {
                         // acc curve
                         draw_vector_curve(
                             ui,
-                            "acceleration",
+                            "3. acceleration",
                             &out.acc_curve,
                             out.current_acc,
                             out.animate_curve_idx,
@@ -346,13 +351,13 @@ impl eframe::App for SplineApp {
                     let stroke = Stroke::new(2.0, velocity_color);
                     let lerp_point = out.constructed_point();
                     let v = params.movement_direction * velocity_scale * out.current_velocity;
-                    painter.arrow(lerp_point, v, stroke);
+                    draw_arrow(&painter, lerp_point, v, 20.0, stroke);
                 }
                 if params.show_acc_vector_on_curve {
                     let stroke = Stroke::new(2.0, acc_color);
                     let lerp_point = out.constructed_point();
                     let v = acc_scale * out.current_acc;
-                    painter.arrow(lerp_point, v, stroke);
+                    draw_arrow(&painter, lerp_point, v, 20.0, stroke);
                 }
 
                 // interpolated points
@@ -395,6 +400,15 @@ impl eframe::App for SplineApp {
     }
 }
 
+fn draw_arrow(painter: &Painter, origin: Pos2, vec: Vec2, tip_length: f32, stroke: Stroke) {
+    let rot = Rot2::from_angle(std::f32::consts::TAU / 10.0);
+    let tip = origin + vec;
+    let dir = vec.normalized();
+    painter.line_segment([origin, tip], stroke);
+    painter.line_segment([tip, tip - tip_length * (rot * dir)], stroke);
+    painter.line_segment([tip, tip - tip_length * (rot.inverse() * dir)], stroke);
+}
+
 fn draw_vector_curve(
     ui: &mut PlotUi,
     name: &str,
@@ -426,12 +440,15 @@ fn draw_vector_curve(
             .map(|v| vec2_to_plot_point(*v * scale));
         PlotPoints::from_iter(values)
     };
-    let line = Line::new(points).color(color).name(name);
+    let line = Line::new(points).color(color).name(name).width(2.0);
     ui.line(line);
 
     if show_vector {
         let tip = vec2_to_plot_point(scale * current);
-        let arrow = Arrows::new(vec![[0.5; 2]], vec![tip]).color(color);
+        let arrow = Arrows::new(vec![[0.5; 2]], vec![tip])
+            .color(color)
+            .highlight(true)
+            .tip_length(15.0);
         ui.arrows(arrow);
     }
 }

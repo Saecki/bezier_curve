@@ -1,9 +1,9 @@
 use eframe::{CreationContext, NativeOptions};
 use egui::{
-    Align2, CentralPanel, Color32, DragValue, FontFamily, FontId, Frame, Id, Pos2, Rect, Sense,
-    SidePanel, Slider, Stroke, Vec2,
+    Align2, CentralPanel, Color32, DragValue, FontFamily, FontId, Frame, Id, Key, Modifiers, Pos2,
+    Rect, Sense, SidePanel, Slider, Stroke, Vec2,
 };
-use egui_plot::{Line, Plot, PlotPoints};
+use egui_plot::{Arrows, Corner, Legend, Line, Plot, PlotPoints, PlotUi};
 use serde_derive::{Deserialize, Serialize};
 
 fn main() {
@@ -41,8 +41,10 @@ impl Default for SplineApp {
             show_lerp_lines: true,
             show_lerp_points: true,
             show_last_lerp_point: true,
-            show_velocity_vector: false,
-            show_acc_vector: false,
+            show_velocity_vector_on_curve: false,
+            show_acc_vector_on_curve: false,
+            show_velocity_vector_in_plot: false,
+            show_acc_vector_in_plot: false,
             animate: false,
             wrap_animation: false,
             animate_constant_speed: false,
@@ -79,8 +81,10 @@ struct Params {
     show_lerp_lines: bool,
     show_lerp_points: bool,
     show_last_lerp_point: bool,
-    show_velocity_vector: bool,
-    show_acc_vector: bool,
+    show_velocity_vector_on_curve: bool,
+    show_acc_vector_on_curve: bool,
+    show_velocity_vector_in_plot: bool,
+    show_acc_vector_in_plot: bool,
     animate: bool,
     wrap_animation: bool,
     animate_curve: bool,
@@ -93,11 +97,13 @@ struct Params {
 struct Output {
     curve_points: Vec<Pos2>,
     distance_table: Vec<f32>,
+    velocity_curve: Vec<Vec2>,
+    acc_curve: Vec<Vec2>,
     animate_curve_idx: usize,
     constant_speed_u: f32,
     lerp_points: Vec<Vec<Pos2>>,
-    velocity: Vec2,
-    acc: Vec2,
+    current_velocity: Vec2,
+    current_acc: Vec2,
 }
 
 impl Output {
@@ -114,8 +120,20 @@ impl eframe::App for SplineApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let control_point_radius = 12.5;
         let point_radius = 8.0;
+        let velocity_scale = 0.1;
+        let acc_scale = 0.025;
+
+        let velocity_color = Color32::from_rgb(0xF0, 0xB0, 0x20);
+        let acc_color = Color32::from_rgb(0x20, 0xB0, 0xF0);
 
         let mut changed = false;
+
+        ctx.input_mut(|i| {
+            if i.consume_key(Modifiers::NONE, Key::Space) {
+                self.params.animate.toggle();
+            }
+        });
+
         SidePanel::right("settings")
             .resizable(false)
             .exact_width(400.0)
@@ -128,8 +146,14 @@ impl eframe::App for SplineApp {
                 ui.checkbox(&mut params.show_lerp_lines, "show construction lines");
                 ui.checkbox(&mut params.show_lerp_points, "show construction points");
                 ui.checkbox(&mut params.show_last_lerp_point, "show constructed point");
-                ui.checkbox(&mut params.show_velocity_vector, "show velocity vector");
-                ui.checkbox(&mut params.show_acc_vector, "show acceleration vector");
+                ui.checkbox(
+                    &mut params.show_velocity_vector_on_curve,
+                    "show velocity vector on curve",
+                );
+                ui.checkbox(
+                    &mut params.show_acc_vector_on_curve,
+                    "show acceleration vector on curve",
+                );
                 ui.checkbox(&mut params.animate, "animate");
                 ui.checkbox(&mut params.wrap_animation, "wrap animation");
                 ui.horizontal(|ui| {
@@ -187,16 +211,58 @@ impl eframe::App for SplineApp {
                 }
 
                 ui.add_space(30.0);
-                Plot::new("distance_table").show_axes(false).show(ui, |ui| {
-                    let values = self.output.distance_table.iter().enumerate().map(|(i, d)| {
-                        let n = self.output.distance_table.len() - 1;
-                        let x = i as f64 / n as f64;
-                        [x, *d as f64]
+                ui.checkbox(
+                    &mut params.show_velocity_vector_in_plot,
+                    "show velocity vector in plot",
+                );
+                ui.checkbox(
+                    &mut params.show_acc_vector_in_plot,
+                    "show acceleration vector in plot",
+                );
+
+                ui.add_space(10.0);
+                Plot::new("distance_table")
+                    .show_axes(false)
+                    .legend(
+                        Legend::default()
+                            .background_alpha(0.5)
+                            .position(Corner::LeftTop),
+                    )
+                    .show(ui, |ui| {
+                        let out = &self.output;
+                        let values = out.distance_table.iter().enumerate().map(|(i, d)| {
+                            let n = out.distance_table.len() - 1;
+                            let x = i as f64 / n as f64;
+                            [x, *d as f64]
+                        });
+                        let points = PlotPoints::from_iter(values);
+                        let line = Line::new(points).name("distance");
+                        ui.line(line);
+
+                        // velocity curve
+                        draw_vector_curve(
+                            ui,
+                            "velocity",
+                            &out.velocity_curve,
+                            out.current_velocity,
+                            out.animate_curve_idx,
+                            velocity_color,
+                            params.animate_curve,
+                            params.show_velocity_vector_in_plot,
+                        );
+
+                        // acc curve
+                        draw_vector_curve(
+                            ui,
+                            "acceleration",
+                            &out.acc_curve,
+                            out.current_acc,
+                            out.animate_curve_idx,
+                            acc_color,
+                            params.animate_curve,
+                            params.show_acc_vector_in_plot,
+                        );
                     });
-                    let points = PlotPoints::from_iter(values);
-                    let line = Line::new(points);
-                    ui.line(line);
-                });
             });
 
         CentralPanel::default()
@@ -249,7 +315,8 @@ impl eframe::App for SplineApp {
                 }
 
                 let out = &self.output;
-                let painter = ui.painter();
+                let clip_rect = Rect::from_min_size(ui.cursor().min, ui.available_size());
+                let painter = ui.painter_at(clip_rect);
 
                 // curve
                 let curve_stroke = Stroke::new(3.0, Color32::GREEN);
@@ -275,17 +342,16 @@ impl eframe::App for SplineApp {
                 }
 
                 // vectors
-                let vector_scale = 0.1;
-                if params.show_velocity_vector {
-                    let stroke = Stroke::new(2.0, Color32::from_rgb(0xF0, 0xB0, 0x20));
+                if params.show_velocity_vector_on_curve {
+                    let stroke = Stroke::new(2.0, velocity_color);
                     let lerp_point = out.constructed_point();
-                    let v = vector_scale * out.velocity;
+                    let v = params.movement_direction * velocity_scale * out.current_velocity;
                     painter.arrow(lerp_point, v, stroke);
                 }
-                if params.show_acc_vector {
-                    let stroke = Stroke::new(2.0, Color32::from_rgb(0x20, 0xB0, 0xF0));
+                if params.show_acc_vector_on_curve {
+                    let stroke = Stroke::new(2.0, acc_color);
                     let lerp_point = out.constructed_point();
-                    let v = vector_scale * out.acc;
+                    let v = acc_scale * out.current_acc;
                     painter.arrow(lerp_point, v, stroke);
                 }
 
@@ -329,9 +395,61 @@ impl eframe::App for SplineApp {
     }
 }
 
+fn draw_vector_curve(
+    ui: &mut PlotUi,
+    name: &str,
+    values: &[Vec2],
+    current: Vec2,
+    current_idx: usize,
+    color: Color32,
+    animate: bool,
+    show_vector: bool,
+) {
+    fn vec2_to_plot_point(v: Vec2) -> [f64; 2] {
+        // invert y axis
+        [0.5 + v.x as f64, 0.5 - v.y as f64]
+    }
+
+    let max = values
+        .iter()
+        .map(|v| v.abs().max_elem())
+        .max_by(|a, b| a.total_cmp(&b))
+        .unwrap();
+    let scale = 0.5 / max;
+    let points = if !animate {
+        let values = values.iter().map(|v| vec2_to_plot_point(*v * scale));
+        PlotPoints::from_iter(values)
+    } else {
+        let values = values[0..=current_idx]
+            .iter()
+            .chain(std::iter::once(&current))
+            .map(|v| vec2_to_plot_point(*v * scale));
+        PlotPoints::from_iter(values)
+    };
+    let line = Line::new(points).color(color).name(name);
+    ui.line(line);
+
+    if show_vector {
+        let tip = vec2_to_plot_point(scale * current);
+        let arrow = Arrows::new(vec![[0.5; 2]], vec![tip]).color(color);
+        ui.arrows(arrow);
+    }
+}
+
 fn compute(params: &Params) -> Output {
     let curve_points = compute_points(&params.control_points, params.num_line_segments);
     let distance_table = compute_distance_table(&curve_points);
+
+    let velocity_curve = compute_vectors(
+        &params.control_points,
+        params.num_line_segments,
+        compute_velocity,
+    );
+    let acc_curve = compute_vectors(
+        &params.control_points,
+        params.num_line_segments,
+        compute_acc,
+    );
 
     let constant_speed_u = constant_speed_u(params.u, &distance_table);
     let u = if params.animate_constant_speed {
@@ -341,16 +459,18 @@ fn compute(params: &Params) -> Output {
     };
     let lerp_points = compute_lerp_points(u, &params.control_points);
     let animate_curve_idx = find_last_line_idx(u, &curve_points);
-    let velocity = compute_velocity(u, &params.control_points, params.movement_direction);
-    let acc = compute_acc(u, &params.control_points);
+    let current_velocity = compute_velocity(u, &params.control_points);
+    let current_acc = compute_acc(u, &params.control_points);
     Output {
         curve_points,
         distance_table,
+        velocity_curve,
+        acc_curve,
         animate_curve_idx,
         constant_speed_u,
         lerp_points,
-        velocity,
-        acc,
+        current_velocity,
+        current_acc,
     }
 }
 
@@ -374,12 +494,26 @@ fn compute_point(u: f32, control_points: &[Pos2]) -> Pos2 {
     accum
 }
 
-fn compute_velocity(u: f32, control_points: &[Pos2], direction: f32) -> Vec2 {
+fn compute_vectors(
+    control_points: &[Pos2],
+    num_line_segments: u32,
+    fun: fn(f32, &[Pos2]) -> Vec2,
+) -> Vec<Vec2> {
+    let mut line = Vec::new();
+    for i in 0..=num_line_segments {
+        let u = i as f32 / num_line_segments as f32;
+        let point = fun(u, control_points);
+        line.push(point);
+    }
+    line
+}
+
+fn compute_velocity(u: f32, control_points: &[Pos2]) -> Vec2 {
     let n = control_points.len() - 1;
     let mut accum = Vec2::ZERO;
     for (i, p) in control_points.windows(2).enumerate() {
         let weight = weight(u, n - 1, i);
-        accum += direction * weight * (p[1] - p[0]);
+        accum += weight * (p[1] - p[0]);
     }
     n as f32 * accum
 }
@@ -391,7 +525,7 @@ fn compute_acc(u: f32, control_points: &[Pos2]) -> Vec2 {
         let weight = weight(u, n - 2, i);
         accum += weight * ((p[2] - p[1]) - (p[1] - p[0]));
     }
-    n as f32 * accum
+    (n * (n - 1)) as f32 * accum
 }
 
 fn weight(u: f32, n: usize, i: usize) -> f32 {
@@ -464,4 +598,14 @@ fn factorial_test() {
     assert_eq!(factorial(3), 6);
     assert_eq!(factorial(4), 24);
     assert_eq!(factorial(5), 120);
+}
+
+trait BoolExt {
+    fn toggle(&mut self);
+}
+
+impl BoolExt for bool {
+    fn toggle(&mut self) {
+        *self = !*self;
+    }
 }

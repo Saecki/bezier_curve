@@ -1,6 +1,7 @@
 use eframe::{CreationContext, NativeOptions};
 use egui::{
-    CentralPanel, Color32, DragValue, Frame, Id, Pos2, Rect, Sense, SidePanel, Slider, Stroke, Vec2,
+    Align2, CentralPanel, Color32, DragValue, FontFamily, FontId, Frame, Id, Pos2, Rect, Sense,
+    SidePanel, Slider, Stroke, Vec2,
 };
 use serde_derive::{Deserialize, Serialize};
 
@@ -22,16 +23,21 @@ struct SplineApp {
     control_points: Vec<Pos2>,
     num_line_segments: u32,
     curve_points: Vec<Pos2>,
+    distance_table: Vec<f32>,
+    animate_constant_speed: bool,
     bernstein: bool,
 
-    show_interp_lines: bool,
-    show_interp_points: bool,
-    show_last_interp_point: bool,
-    animate_interp_val: bool,
+    show_lerp_lines: bool,
+    show_lerp_points: bool,
+    show_last_lerp_point: bool,
+    animate_u: bool,
+    animate_curve: bool,
+    animate_curve_idx: usize,
     animate_direction: f32,
-    interp_val: f32,
+    u: f32,
+    constant_speed_u: f32,
     #[serde(default)]
-    interp_points: Vec<Vec<Pos2>>,
+    lerp_points: Vec<Vec<Pos2>>,
 }
 
 impl Default for SplineApp {
@@ -45,21 +51,29 @@ impl Default for SplineApp {
         ];
         let num_line_segments = 50;
         let curve_points = compute_points(&control_points, num_line_segments, bernstein);
+        let distance_table = compute_distance_table(&curve_points);
 
-        let interp_val = 0.3;
-        let interp_points = compute_interp_points(interp_val, &control_points);
+        let u = 0.3;
+        let animate_curve_idx = find_last_line_idx(u, &curve_points);
+        let constant_speed_u = constant_speed_u(u, &distance_table);
+        let lerp_points = compute_lerp_points(u, &control_points);
         Self {
             control_points,
             num_line_segments: 50,
             curve_points,
+            distance_table,
             bernstein,
-            show_interp_lines: true,
-            show_interp_points: true,
-            show_last_interp_point: true,
-            animate_interp_val: false,
+            show_lerp_lines: true,
+            show_lerp_points: true,
+            show_last_lerp_point: true,
+            animate_u: false,
+            animate_curve: false,
+            animate_curve_idx,
+            animate_constant_speed: false,
             animate_direction: 1.0,
-            interp_val,
-            interp_points,
+            u,
+            constant_speed_u,
+            lerp_points,
         }
     }
 }
@@ -82,12 +96,13 @@ impl eframe::App for SplineApp {
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        let control_point_radius = 12.5;
         let point_radius = 8.0;
 
         let mut changed = false;
         SidePanel::right("settings")
             .resizable(false)
-            .exact_width(200.0)
+            .exact_width(400.0)
             .show(ctx, |ui| {
                 changed |= ui.checkbox(&mut self.bernstein, "bernstein").changed();
                 ui.add_space(30.0);
@@ -114,22 +129,37 @@ impl eframe::App for SplineApp {
                 });
 
                 ui.add_space(30.0);
-                ui.checkbox(&mut self.show_interp_lines, "show interp lines");
-                ui.checkbox(&mut self.show_interp_points, "show interp points");
-                ui.checkbox(&mut self.show_last_interp_point, "show last interp point");
-                ui.checkbox(&mut self.animate_interp_val, "animate");
+                ui.checkbox(&mut self.show_lerp_lines, "show construction lines");
+                ui.checkbox(&mut self.show_lerp_points, "show construction points");
+                ui.checkbox(&mut self.show_last_lerp_point, "show animated point");
+                ui.checkbox(&mut self.animate_u, "animate");
+                ui.checkbox(&mut self.animate_curve, "animate curve");
+                ui.checkbox(&mut self.animate_constant_speed, "constant speed");
                 ui.label("u");
 
-                let slider = Slider::new(&mut self.interp_val, 0.0..=1.0)
+                let slider = Slider::new(&mut self.u, 0.0..=1.0)
                     .fixed_decimals(4)
                     .drag_value_speed(0.002);
                 changed |= ui.add(slider).changed();
+
+                let slider = Slider::new(&mut self.constant_speed_u, 0.0..=1.0).fixed_decimals(4);
+                ui.add_enabled(false, slider);
+
+                ui.add_space(30.0);
+                for (i, p) in self.control_points.iter().enumerate() {
+                    ui.horizontal(|ui| {
+                        ui.label(format!("{i}"));
+
+                        let Pos2 { x, y } = p;
+                        ui.label(format!("({x}, {y})"));
+                    });
+                }
             });
 
         CentralPanel::default()
             .frame(Frame::none().fill(Color32::from_gray(0x20)))
             .show(ctx, |ui| {
-                let clamp_margin = Vec2::splat(point_radius);
+                let clamp_margin = Vec2::splat(control_point_radius);
                 let clamp_min = clamp_margin.to_pos2();
                 let clamp_max = (ui.available_size() - clamp_margin).to_pos2();
                 for (i, pos) in self.control_points.iter_mut().enumerate() {
@@ -145,17 +175,17 @@ impl eframe::App for SplineApp {
                     *pos = pos.clamp(clamp_min, clamp_max);
                 }
 
-                if self.animate_interp_val {
+                if self.animate_u {
                     // force refresh when animating
                     ui.ctx().request_repaint();
 
                     let delta = ui.input(|i| i.stable_dt) / 2.5;
-                    self.interp_val += self.animate_direction * delta;
-                    self.interp_val = self.interp_val.clamp(0.0, 1.0);
+                    self.u += self.animate_direction * delta;
+                    self.u = self.u.clamp(0.0, 1.0);
 
-                    if self.interp_val == 1.0 {
+                    if self.u == 1.0 {
                         self.animate_direction = -1.0;
-                    } else if self.interp_val == 0.0 {
+                    } else if self.u == 0.0 {
                         self.animate_direction = 1.0;
                     }
                     changed = true;
@@ -168,16 +198,32 @@ impl eframe::App for SplineApp {
                         self.bernstein,
                     );
 
-                    self.interp_points =
-                        compute_interp_points(self.interp_val, &self.control_points);
+                    self.distance_table = compute_distance_table(&self.curve_points);
+                    self.constant_speed_u = constant_speed_u(self.u, &self.distance_table);
+                    let u = if self.animate_constant_speed {
+                        self.constant_speed_u
+                    } else {
+                        self.u
+                    };
+                    self.animate_curve_idx = find_last_line_idx(u, &self.curve_points);
+                    self.lerp_points = compute_lerp_points(u, &self.control_points);
                 }
 
                 let painter = ui.painter();
 
                 // curve
-                for p in self.curve_points.windows(2) {
-                    let stroke = Stroke::new(3.0, Color32::GREEN);
-                    painter.line_segment([p[0], p[1]], stroke);
+                let curve_stroke = Stroke::new(3.0, Color32::GREEN);
+                if !self.animate_curve {
+                    for p in self.curve_points.windows(2) {
+                        painter.line_segment([p[0], p[1]], curve_stroke);
+                    }
+                } else {
+                    for p in self.curve_points[0..=self.animate_curve_idx].windows(2) {
+                        painter.line_segment([p[0], p[1]], curve_stroke);
+                    }
+                    let last_point = self.curve_points[self.animate_curve_idx];
+                    let lerp_point = self.lerp_points[self.lerp_points.len() - 1][0];
+                    painter.line_segment([last_point, lerp_point], curve_stroke);
                 }
 
                 // control point lines
@@ -187,8 +233,8 @@ impl eframe::App for SplineApp {
                 }
 
                 // interpolated points
-                for points in self.interp_points.iter() {
-                    if self.show_interp_lines {
+                for points in self.lerp_points.iter() {
+                    if self.show_lerp_lines {
                         for p in points.windows(2) {
                             let stroke = Stroke::new(1.0, Color32::LIGHT_BLUE);
                             painter.line_segment([p[0], p[1]], stroke);
@@ -196,11 +242,11 @@ impl eframe::App for SplineApp {
                     }
 
                     if points.len() == 1 {
-                        if self.show_last_interp_point {
+                        if self.show_last_lerp_point {
                             let color = Color32::from_rgb(0xF0, 0x20, 0xF0);
                             painter.circle_filled(points[0], point_radius, color);
                         }
-                    } else if self.show_interp_points {
+                    } else if self.show_lerp_points {
                         for p in points.iter() {
                             painter.circle_filled(*p, point_radius, Color32::GOLD);
                         }
@@ -208,8 +254,16 @@ impl eframe::App for SplineApp {
                 }
 
                 // control points
-                for p in self.control_points.iter() {
-                    painter.circle_filled(*p, point_radius, Color32::RED)
+                for (i, p) in self.control_points.iter().enumerate() {
+                    painter.circle_filled(*p, control_point_radius, Color32::RED);
+                    let font = FontId::new(1.5 * control_point_radius, FontFamily::Proportional);
+                    painter.text(
+                        *p,
+                        Align2::CENTER_CENTER,
+                        i.to_string(),
+                        font,
+                        Color32::WHITE,
+                    );
                 }
             });
     }
@@ -248,7 +302,7 @@ fn factorial(n: usize) -> usize {
     }
 }
 
-fn compute_interp_points(u: f32, control_points: &[Pos2]) -> Vec<Vec<Pos2>> {
+fn compute_lerp_points(u: f32, control_points: &[Pos2]) -> Vec<Vec<Pos2>> {
     let mut interp_points = vec![lerp(u, control_points)];
     for i in 1..control_points.len() - 1 {
         let next_points = lerp(u, &interp_points[i - 1]);
@@ -267,6 +321,42 @@ fn compute_point(u: f32, control_points: &[Pos2]) -> Pos2 {
 
 fn lerp(u: f32, points: &[Pos2]) -> Vec<Pos2> {
     points.windows(2).map(|p| p[0].lerp(p[1], u)).collect()
+}
+
+fn compute_distance_table(points: &[Pos2]) -> Vec<f32> {
+    let total_distance: f32 = points.windows(2).map(|p| p[0].distance(p[1])).sum();
+    let mut current_distance = 0.0;
+    let mut table = vec![0.0];
+    for p in points.windows(2) {
+        let dist = p[0].distance(p[1]);
+        current_distance += dist;
+        table.push(current_distance / total_distance);
+    }
+    table
+}
+
+fn constant_speed_u(u: f32, distance_table: &[f32]) -> f32 {
+    if u == 0.0 || u == 1.0 {
+        return u;
+    }
+
+    let i = distance_table.iter().position(|t| *t > u).unwrap();
+    let in_a = distance_table[i - 1];
+    let in_b = distance_table[i];
+    let out_a = (i - 1) as f32 / (distance_table.len() - 1) as f32;
+    let out_b = (i) as f32 / (distance_table.len() - 1) as f32;
+
+    remap(u, in_a, in_b, out_a, out_b)
+}
+
+fn remap(val: f32, in_a: f32, in_b: f32, out_a: f32, out_b: f32) -> f32 {
+    let norm = (val - in_a) / (in_b - in_a);
+    out_a + norm * (out_b - out_a)
+}
+
+fn find_last_line_idx(u: f32, points: &[Pos2]) -> usize {
+    let n = (points.len() - 1) as f32;
+    (u * n).floor() as usize
 }
 
 #[test]

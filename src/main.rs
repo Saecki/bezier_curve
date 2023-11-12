@@ -26,31 +26,6 @@ struct SplineApp {
     output: Output,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-struct Params {
-    control_points: Vec<Pos2>,
-    num_line_segments: u32,
-    animate_constant_speed: bool,
-    bernstein: bool,
-    show_lerp_lines: bool,
-    show_lerp_points: bool,
-    show_last_lerp_point: bool,
-    animate: bool,
-    animate_curve: bool,
-
-    animate_direction: f32,
-    u: f32,
-}
-
-#[derive(Clone, Debug, Default)]
-struct Output {
-    curve_points: Vec<Pos2>,
-    distance_table: Vec<f32>,
-    animate_curve_idx: usize,
-    constant_speed_u: f32,
-    lerp_points: Vec<Vec<Pos2>>,
-}
-
 impl Default for SplineApp {
     fn default() -> Self {
         let params = Params {
@@ -60,16 +35,17 @@ impl Default for SplineApp {
                 Pos2::new(550.0, 100.0),
                 Pos2::new(600.0, 400.0),
             ],
-            bernstein: false,
             num_line_segments: 50,
             show_lerp_lines: true,
             show_lerp_points: true,
             show_last_lerp_point: true,
+            show_velocity_vector: false,
+            show_acc_vector: false,
             animate: false,
             animate_constant_speed: false,
             animate_curve: false,
 
-            animate_direction: 1.0,
+            movement_direction: 1.0,
             u: 0.3,
         };
         let output = compute(&params);
@@ -87,6 +63,40 @@ impl SplineApp {
         }
 
         Self::default()
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct Params {
+    control_points: Vec<Pos2>,
+    num_line_segments: u32,
+    animate_constant_speed: bool,
+    show_lerp_lines: bool,
+    show_lerp_points: bool,
+    show_last_lerp_point: bool,
+    show_velocity_vector: bool,
+    show_acc_vector: bool,
+    animate: bool,
+    animate_curve: bool,
+
+    movement_direction: f32,
+    u: f32,
+}
+
+#[derive(Clone, Debug, Default)]
+struct Output {
+    curve_points: Vec<Pos2>,
+    distance_table: Vec<f32>,
+    animate_curve_idx: usize,
+    constant_speed_u: f32,
+    lerp_points: Vec<Vec<Pos2>>,
+    velocity: Vec2,
+    acc: Vec2,
+}
+
+impl Output {
+    fn constructed_point(&self) -> Pos2 {
+        self.lerp_points[self.lerp_points.len() - 1][0]
     }
 }
 
@@ -110,6 +120,8 @@ impl eframe::App for SplineApp {
                 ui.checkbox(&mut params.show_lerp_lines, "show construction lines");
                 ui.checkbox(&mut params.show_lerp_points, "show construction points");
                 ui.checkbox(&mut params.show_last_lerp_point, "show constructed point");
+                ui.checkbox(&mut params.show_velocity_vector, "show velocity vector");
+                ui.checkbox(&mut params.show_acc_vector, "show acceleration vector");
                 ui.checkbox(&mut params.animate, "animate");
                 ui.checkbox(&mut params.animate_curve, "animate curve");
                 ui.checkbox(&mut params.animate_constant_speed, "constant speed");
@@ -118,14 +130,15 @@ impl eframe::App for SplineApp {
                 let slider = Slider::new(&mut params.u, 0.0..=1.0)
                     .fixed_decimals(4)
                     .drag_value_speed(0.002);
-                changed |= ui.add(slider).changed();
+                let resp = ui.add(slider);
+                if resp.changed() {
+                    params.movement_direction = resp.drag_delta().x.signum();
+                    changed = true;
+                }
 
                 let slider =
                     Slider::new(&mut self.output.constant_speed_u, 0.0..=1.0).fixed_decimals(4);
                 ui.add_enabled(false, slider);
-
-                ui.add_space(30.0);
-                changed |= ui.checkbox(&mut params.bernstein, "bernstein").changed();
 
                 ui.add_space(30.0);
                 ui.label("line segments");
@@ -198,13 +211,13 @@ impl eframe::App for SplineApp {
                     ui.ctx().request_repaint();
 
                     let delta = ui.input(|i| i.stable_dt) / 2.5;
-                    params.u += params.animate_direction * delta;
+                    params.u += params.movement_direction * delta;
                     params.u = params.u.clamp(0.0, 1.0);
 
                     if params.u == 1.0 {
-                        params.animate_direction = -1.0;
+                        params.movement_direction = -1.0;
                     } else if params.u == 0.0 {
-                        params.animate_direction = 1.0;
+                        params.movement_direction = 1.0;
                     }
                     changed = true;
                 }
@@ -227,7 +240,7 @@ impl eframe::App for SplineApp {
                         painter.line_segment([p[0], p[1]], curve_stroke);
                     }
                     let last_point = out.curve_points[out.animate_curve_idx];
-                    let lerp_point = out.lerp_points[out.lerp_points.len() - 1][0];
+                    let lerp_point = out.constructed_point();
                     painter.line_segment([last_point, lerp_point], curve_stroke);
                 }
 
@@ -235,6 +248,21 @@ impl eframe::App for SplineApp {
                 for p in params.control_points.windows(2) {
                     let stroke = Stroke::new(2.0, Color32::BLUE);
                     painter.line_segment([p[0], p[1]], stroke);
+                }
+
+                // vectors
+                let vector_scale = 0.1;
+                if params.show_velocity_vector {
+                    let stroke = Stroke::new(2.0, Color32::from_rgb(0xF0, 0xB0, 0x20));
+                    let lerp_point = out.constructed_point();
+                    let v = vector_scale * out.velocity;
+                    painter.arrow(lerp_point, v, stroke);
+                }
+                if params.show_acc_vector {
+                    let stroke = Stroke::new(2.0, Color32::from_rgb(0x20, 0xB0, 0xF0));
+                    let lerp_point = out.constructed_point();
+                    let v = vector_scale * out.acc;
+                    painter.arrow(lerp_point, v, stroke);
                 }
 
                 // interpolated points
@@ -275,11 +303,7 @@ impl eframe::App for SplineApp {
 }
 
 fn compute(params: &Params) -> Output {
-    let curve_points = compute_points(
-        &params.control_points,
-        params.num_line_segments,
-        params.bernstein,
-    );
+    let curve_points = compute_points(&params.control_points, params.num_line_segments);
     let distance_table = compute_distance_table(&curve_points);
 
     let constant_speed_u = constant_speed_u(params.u, &distance_table);
@@ -290,38 +314,62 @@ fn compute(params: &Params) -> Output {
     };
     let lerp_points = compute_lerp_points(u, &params.control_points);
     let animate_curve_idx = find_last_line_idx(u, &curve_points);
+    let velocity = compute_velocity(u, &params.control_points, params.movement_direction);
+    let acc = compute_acc(u, &params.control_points);
     Output {
         curve_points,
         distance_table,
         animate_curve_idx,
         constant_speed_u,
         lerp_points,
+        velocity,
+        acc,
     }
 }
 
-fn compute_points(control_points: &[Pos2], num_line_segments: u32, bernstein: bool) -> Vec<Pos2> {
+fn compute_points(control_points: &[Pos2], num_line_segments: u32) -> Vec<Pos2> {
     let mut line = Vec::new();
     for i in 0..=num_line_segments {
         let u = i as f32 / num_line_segments as f32;
-        let point = if bernstein {
-            compute_point_bernstein(u, control_points)
-        } else {
-            compute_point(u, control_points)
-        };
+        let point = compute_point(u, control_points);
         line.push(point);
     }
     line
 }
 
-fn compute_point_bernstein(u: f32, control_points: &[Pos2]) -> Pos2 {
-    let mut accum = Pos2::ZERO;
+fn compute_point(u: f32, control_points: &[Pos2]) -> Pos2 {
     let n = control_points.len() - 1;
+    let mut accum = Pos2::ZERO;
     for (i, p) in control_points.iter().enumerate() {
-        let coefficient = (factorial(n)) / (factorial(n - i) * factorial(i));
-        let weight = coefficient as f32 * u.powi(i as i32) * (1.0 - u).powi((n - i) as i32);
+        let weight = weight(u, n, i);
         accum += weight * p.to_vec2();
     }
     accum
+}
+
+fn compute_velocity(u: f32, control_points: &[Pos2], direction: f32) -> Vec2 {
+    let n = control_points.len() - 1;
+    let mut accum = Vec2::ZERO;
+    for (i, p) in control_points.windows(2).enumerate() {
+        let weight = weight(u, n - 1, i);
+        accum += direction * weight * (p[1] - p[0]);
+    }
+    n as f32 * accum
+}
+
+fn compute_acc(u: f32, control_points: &[Pos2]) -> Vec2 {
+    let n = control_points.len() - 1;
+    let mut accum = Vec2::ZERO;
+    for (i, p) in control_points.windows(3).enumerate() {
+        let weight = weight(u, n - 2, i);
+        accum += weight * ((p[2] - p[1]) - (p[1] - p[0]));
+    }
+    n as f32 * accum
+}
+
+fn weight(u: f32, n: usize, i: usize) -> f32 {
+    let coefficient = (factorial(n)) / (factorial(n - i) * factorial(i));
+    coefficient as f32 * u.powi(i as i32) * (1.0 - u).powi((n - i) as i32)
 }
 
 fn factorial(n: usize) -> usize {
@@ -339,14 +387,6 @@ fn compute_lerp_points(u: f32, control_points: &[Pos2]) -> Vec<Vec<Pos2>> {
         interp_points.push(next_points);
     }
     interp_points
-}
-
-fn compute_point(u: f32, control_points: &[Pos2]) -> Pos2 {
-    let mut current_points = lerp(u, control_points);
-    while current_points.len() > 1 {
-        current_points = lerp(u, &current_points);
-    }
-    current_points[0]
 }
 
 fn lerp(u: f32, points: &[Pos2]) -> Vec<Pos2> {

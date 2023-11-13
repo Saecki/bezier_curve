@@ -5,10 +5,14 @@ use egui::{
     Align2, Button, CentralPanel, Color32, DragValue, FontFamily, FontId, Frame, Id, Key, Margin,
     Modifiers, Painter, Pos2, Rect, ScrollArea, Sense, SidePanel, Slider, Stroke, Ui, Vec2,
 };
-use egui_plot::{Arrows, Corner, Legend, Line, Plot, PlotBounds, PlotPoints, PlotUi};
+use egui_plot::{Arrows, Corner, Legend, Line, Plot, PlotBounds, PlotPoint, PlotPoints, PlotUi};
 use serde_derive::{Deserialize, Serialize};
 
+#[cfg(test)]
+mod test;
+
 const DISTANCE_MAP_COLOR: Color32 = Color32::from_rgb(0xF0, 0x60, 0x80);
+const CURVATURE_COLOR: Color32 = Color32::from_rgb(0x70, 0xF0, 0x20);
 const VELOCITY_COLOR: Color32 = Color32::from_rgb(0xF0, 0xB0, 0x20);
 const ACC_COLOR: Color32 = Color32::from_rgb(0x20, 0xB0, 0xF0);
 const WIDGET_SPACING: f32 = 8.0;
@@ -57,7 +61,7 @@ impl Default for SplineApp {
             wrap_animation: false,
             animate_constant_speed: false,
             animate_curve: false,
-
+            plot_tab: PlotTab::Time,
             movement_direction: 1.0,
             u: 0.3,
         };
@@ -98,8 +102,15 @@ struct Params {
     wrap_animation: bool,
     animate_curve: bool,
 
+    plot_tab: PlotTab,
     movement_direction: f32,
     u: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+enum PlotTab {
+    Time,
+    Spacial,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -169,60 +180,7 @@ impl eframe::App for SplineApp {
                     });
 
                 ui.add_space(WIDGET_SPACING);
-                Plot::new("distance_table")
-                    .height(ui.available_width())
-                    .show_axes(false)
-                    .allow_scroll(false)
-                    .allow_drag(false)
-                    .allow_zoom(false)
-                    .data_aspect(1.0)
-                    .view_aspect(1.0)
-                    .legend(
-                        Legend::default()
-                            .background_alpha(0.5)
-                            .position(Corner::LeftTop),
-                    )
-                    .show(ui, |ui| {
-                        ui.set_plot_bounds(PlotBounds::from_min_max([-0.1; 2], [1.1; 2]));
-
-                        let params = &self.params;
-                        let out = &self.output;
-                        let values = out.distance_table.iter().enumerate().map(|(i, d)| {
-                            let n = out.distance_table.len() - 1;
-                            let x = i as f64 / n as f64;
-                            [x, *d as f64]
-                        });
-                        let points = PlotPoints::from_iter(values);
-                        let line = Line::new(points)
-                            .name("1. distance map")
-                            .color(DISTANCE_MAP_COLOR)
-                            .width(2.0);
-                        ui.line(line);
-
-                        // velocity curve
-                        draw_vector_curve(
-                            ui,
-                            "2. velocity",
-                            &out.velocity_curve,
-                            out.current_velocity,
-                            out.animate_curve_idx,
-                            VELOCITY_COLOR,
-                            params.animate_curve,
-                            params.show_velocity_vector_in_plot,
-                        );
-
-                        // acc curve
-                        draw_vector_curve(
-                            ui,
-                            "3. acceleration",
-                            &out.acc_curve,
-                            out.current_acc,
-                            out.animate_curve_idx,
-                            ACC_COLOR,
-                            params.animate_curve,
-                            params.show_acc_vector_in_plot,
-                        );
-                    });
+                draw_plots(ui, self);
             });
 
         CentralPanel::default()
@@ -467,6 +425,168 @@ fn draw_sidebar(ui: &mut Ui, app: &mut SplineApp) -> bool {
     changed
 }
 
+fn draw_plots(ui: &mut Ui, app: &mut SplineApp) {
+    ui.horizontal(|ui| {
+        ui.selectable_value(&mut app.params.plot_tab, PlotTab::Time, "time");
+        ui.selectable_value(&mut app.params.plot_tab, PlotTab::Spacial, "spacial");
+    });
+
+    match app.params.plot_tab {
+        PlotTab::Time => draw_time_plots(ui, app),
+        PlotTab::Spacial => draw_spacial_plots(ui, app),
+    }
+}
+
+fn draw_time_plots(ui: &mut Ui, app: &SplineApp) {
+    let params = &app.params;
+    let out = &app.output;
+    Plot::new("time_plot")
+        .height(ui.available_width())
+        .show_axes(false)
+        .allow_scroll(false)
+        .allow_drag(false)
+        .allow_zoom(false)
+        .data_aspect(1.0)
+        .view_aspect(1.0)
+        .legend(
+            Legend::default()
+                .background_alpha(0.5)
+                .position(Corner::LeftTop),
+        )
+        .show(ui, |ui| {
+            ui.set_plot_bounds(PlotBounds::from_min_max([-0.1; 2], [1.1; 2]));
+
+            // distance map
+            let values = out.distance_table.iter().enumerate().map(|(i, d)| {
+                let n = out.distance_table.len() - 1;
+                let x = i as f64 / n as f64;
+                [x, *d as f64]
+            });
+            let points = PlotPoints::from_iter(values);
+            let line = Line::new(points)
+                .name("1. distance map")
+                .color(DISTANCE_MAP_COLOR)
+                .width(2.0);
+            ui.line(line);
+
+            // velocity
+            draw_time_plot(
+                ui,
+                "2. velocity",
+                &out.velocity_curve,
+                VELOCITY_COLOR,
+                |v| v.length(),
+            );
+
+            // acc
+            draw_time_plot(ui, "3. acceleration", &out.acc_curve, ACC_COLOR, |a| {
+                a.length()
+            });
+
+            // curvature
+            let max_curvature = out
+                .acc_curve
+                .iter()
+                .zip(out.velocity_curve.iter())
+                .map(|(a, v)| compute_curvature(*v, *a).abs())
+                .max_by(|a, b| a.total_cmp(b))
+                .unwrap();
+            let curvature_scale = 0.5 / max_curvature;
+            let values = out
+                .acc_curve
+                .iter()
+                .zip(out.velocity_curve.iter())
+                .enumerate()
+                .map(|(i, (a, v))| {
+                    let n = out.acc_curve.len() - 1;
+                    let x = i as f64 / n as f64;
+                    let curvature = curvature_scale * compute_curvature(*v, *a);
+                    [x, 0.5 + curvature as f64]
+                });
+            let points = PlotPoints::from_iter(values);
+            let line = Line::new(points)
+                .name("4. curvature")
+                .color(CURVATURE_COLOR)
+                .width(2.0);
+            ui.line(line);
+
+            // cursor
+            let current_u = current_u(params, out);
+            let points = PlotPoints::Owned(vec![
+                PlotPoint::new(current_u, 0.0),
+                PlotPoint::new(current_u, 1.0),
+            ]);
+            let cursor = Line::new(points).width(1.5).color(Color32::RED);
+            ui.line(cursor);
+        });
+}
+
+fn draw_time_plot<F>(ui: &mut PlotUi, name: &str, values: &[Vec2], color: Color32, compute: F)
+where
+    F: Fn(&Vec2) -> f32,
+{
+    let max = values
+        .iter()
+        .map(|v| compute(v))
+        .max_by(|a, b| a.total_cmp(b))
+        .unwrap();
+    let scale = 1.0 / max;
+    let values = values.iter().enumerate().map(|(i, v)| {
+        let n = values.len() - 1;
+        let x = i as f64 / n as f64;
+        let v = scale * compute(v);
+        [x, v as f64]
+    });
+    let points = PlotPoints::from_iter(values);
+    let line = Line::new(points).name(name).color(color).width(2.0);
+    ui.line(line);
+}
+
+fn draw_spacial_plots(ui: &mut Ui, app: &SplineApp) {
+    let params = &app.params;
+    let out = &app.output;
+    Plot::new("spacial_plot")
+        .height(ui.available_width())
+        .show_axes(false)
+        .allow_scroll(false)
+        .allow_drag(false)
+        .allow_zoom(false)
+        .data_aspect(1.0)
+        .view_aspect(1.0)
+        .legend(
+            Legend::default()
+                .background_alpha(0.5)
+                .position(Corner::LeftTop),
+        )
+        .show(ui, |ui| {
+            ui.set_plot_bounds(PlotBounds::from_min_max([-0.6; 2], [0.6; 2]));
+
+            // velocity curve
+            draw_vector_plot(
+                ui,
+                "2. velocity",
+                &out.velocity_curve,
+                out.current_velocity,
+                out.animate_curve_idx,
+                VELOCITY_COLOR,
+                params.animate_curve,
+                params.show_velocity_vector_in_plot,
+            );
+
+            // acc curve
+            draw_vector_plot(
+                ui,
+                "3. acceleration",
+                &out.acc_curve,
+                out.current_acc,
+                out.animate_curve_idx,
+                ACC_COLOR,
+                params.animate_curve,
+                params.show_acc_vector_in_plot,
+            );
+        });
+}
+
 fn draw_arrow(painter: &Painter, origin: Pos2, vec: Vec2, tip_length: f32, stroke: Stroke) {
     let rot = Rot2::from_angle(std::f32::consts::TAU / 10.0);
     let tip = origin + vec;
@@ -476,7 +596,7 @@ fn draw_arrow(painter: &Painter, origin: Pos2, vec: Vec2, tip_length: f32, strok
     painter.line_segment([tip, tip - tip_length * (rot.inverse() * dir)], stroke);
 }
 
-fn draw_vector_curve(
+fn draw_vector_plot(
     ui: &mut PlotUi,
     name: &str,
     values: &[Vec2],
@@ -488,7 +608,7 @@ fn draw_vector_curve(
 ) {
     fn vec2_to_plot_point(v: Vec2) -> [f64; 2] {
         // invert y axis
-        [0.5 + v.x as f64, 0.5 - v.y as f64]
+        [v.x as f64, -v.y as f64]
     }
 
     let max = values
@@ -512,11 +632,19 @@ fn draw_vector_curve(
 
     if show_vector {
         let tip = vec2_to_plot_point(scale * current);
-        let arrow = Arrows::new(vec![[0.5; 2]], vec![tip])
+        let arrow = Arrows::new(vec![[0.0; 2]], vec![tip])
             .color(color)
             .highlight(true)
             .tip_length(15.0);
         ui.arrows(arrow);
+    }
+}
+
+fn current_u(params: &Params, out: &Output) -> f32 {
+    if params.animate_constant_speed {
+        out.constant_speed_u
+    } else {
+        params.u
     }
 }
 
@@ -535,7 +663,7 @@ fn compute(params: &Params) -> Output {
         compute_acc,
     );
 
-    let constant_speed_u = constant_speed_u(params.u, &distance_table);
+    let constant_speed_u = compute_constant_speed_u(params.u, &distance_table);
     let u = if params.animate_constant_speed {
         constant_speed_u
     } else {
@@ -612,6 +740,10 @@ fn compute_acc(u: f32, control_points: &[Pos2]) -> Vec2 {
     (n * (n - 1)) as f32 * accum
 }
 
+fn compute_curvature(v: Vec2, a: Vec2) -> f32 {
+    (v.x * a.y - v.y * a.x) / (v.x * v.x + v.y * v.y).powf(1.5)
+}
+
 fn weight(u: f32, n: usize, i: usize) -> f32 {
     let coefficient = (factorial(n)) / (factorial(n - i) * factorial(i));
     coefficient as f32 * u.powi(i as i32) * (1.0 - u).powi((n - i) as i32)
@@ -650,7 +782,7 @@ fn compute_distance_table(points: &[Pos2]) -> Vec<f32> {
     table
 }
 
-fn constant_speed_u(u: f32, distance_table: &[f32]) -> f32 {
+fn compute_constant_speed_u(u: f32, distance_table: &[f32]) -> f32 {
     if u == 0.0 || u == 1.0 {
         return u;
     }
@@ -672,16 +804,6 @@ fn remap(val: f32, in_a: f32, in_b: f32, out_a: f32, out_b: f32) -> f32 {
 fn find_last_line_idx(u: f32, points: &[Pos2]) -> usize {
     let n = (points.len() - 1) as f32;
     (u * n).floor() as usize
-}
-
-#[test]
-fn factorial_test() {
-    assert_eq!(factorial(0), 1);
-    assert_eq!(factorial(1), 1);
-    assert_eq!(factorial(2), 2);
-    assert_eq!(factorial(3), 6);
-    assert_eq!(factorial(4), 24);
-    assert_eq!(factorial(5), 120);
 }
 
 trait BoolExt {

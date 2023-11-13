@@ -1,8 +1,9 @@
 use eframe::{CreationContext, NativeOptions};
 use egui::emath::Rot2;
+use egui::scroll_area::ScrollBarVisibility;
 use egui::{
-    Align2, CentralPanel, Color32, DragValue, FontFamily, FontId, Frame, Id, Key, Modifiers,
-    Painter, Pos2, Rect, ScrollArea, Sense, SidePanel, Slider, Stroke, Ui, Vec2,
+    Align2, Button, CentralPanel, Color32, DragValue, FontFamily, FontId, Frame, Id, Key,
+    Modifiers, Painter, Pos2, Rect, ScrollArea, Sense, SidePanel, Slider, Stroke, Ui, Vec2,
 };
 use egui_plot::{Arrows, Corner, Legend, Line, Plot, PlotPoints, PlotUi};
 use serde_derive::{Deserialize, Serialize};
@@ -10,6 +11,7 @@ use serde_derive::{Deserialize, Serialize};
 const DISTANCE_MAP_COLOR: Color32 = Color32::from_rgb(0xF0, 0x60, 0x80);
 const VELOCITY_COLOR: Color32 = Color32::from_rgb(0xF0, 0xB0, 0x20);
 const ACC_COLOR: Color32 = Color32::from_rgb(0x20, 0xB0, 0xF0);
+const WIDGET_SPACING: f32 = 8.0;
 
 fn main() {
     let native_options = NativeOptions {
@@ -133,8 +135,16 @@ impl eframe::App for SplineApp {
         let mut changed = false;
 
         ctx.input_mut(|i| {
-            if i.consume_key(Modifiers::NONE, Key::Space) {
+            if i.consume_key(Modifiers::COMMAND, Key::Space) {
                 self.params.animate.toggle();
+            } else if i.consume_key(Modifiers::COMMAND, Key::ArrowRight) {
+                self.params.movement_direction = 1.0;
+            } else if i.consume_key(Modifiers::COMMAND, Key::ArrowLeft) {
+                self.params.movement_direction = -1.0;
+            } else if i.consume_key(Modifiers::COMMAND, Key::ArrowUp) {
+                self.params.animation_time += 0.1;
+            } else if i.consume_key(Modifiers::COMMAND, Key::ArrowDown) {
+                self.params.animation_time -= 0.1;
             }
         });
 
@@ -143,9 +153,66 @@ impl eframe::App for SplineApp {
             .show_separator_line(false)
             .exact_width(400.0)
             .show(ctx, |ui| {
-                ScrollArea::vertical().show(ui, |ui| {
-                    changed |= draw_sidebar(ui, self);
-                });
+                ScrollArea::vertical()
+                    .max_height(ui.available_height() - 2.0 * WIDGET_SPACING - ui.available_width())
+                    .scroll_bar_visibility(ScrollBarVisibility::AlwaysVisible)
+                    .show(ui, |ui| {
+                        changed |= draw_sidebar(ui, self);
+
+                        // fill entire width
+                        ui.allocate_space(Vec2::new(ui.available_width(), 0.0));
+                    });
+
+                ui.add_space(WIDGET_SPACING);
+                Plot::new("distance_table")
+                    .height(ui.available_width())
+                    .show_axes(false)
+                    .data_aspect(1.0)
+                    .view_aspect(1.0)
+                    .legend(
+                        Legend::default()
+                            .background_alpha(0.5)
+                            .position(Corner::LeftTop),
+                    )
+                    .show(ui, |ui| {
+                        let params = &self.params;
+                        let out = &self.output;
+                        let values = out.distance_table.iter().enumerate().map(|(i, d)| {
+                            let n = out.distance_table.len() - 1;
+                            let x = i as f64 / n as f64;
+                            [x, *d as f64]
+                        });
+                        let points = PlotPoints::from_iter(values);
+                        let line = Line::new(points)
+                            .name("1. distance map")
+                            .color(DISTANCE_MAP_COLOR)
+                            .width(2.0);
+                        ui.line(line);
+
+                        // velocity curve
+                        draw_vector_curve(
+                            ui,
+                            "2. velocity",
+                            &out.velocity_curve,
+                            out.current_velocity,
+                            out.animate_curve_idx,
+                            VELOCITY_COLOR,
+                            params.animate_curve,
+                            params.show_velocity_vector_in_plot,
+                        );
+
+                        // acc curve
+                        draw_vector_curve(
+                            ui,
+                            "3. acceleration",
+                            &out.acc_curve,
+                            out.current_acc,
+                            out.animate_curve_idx,
+                            ACC_COLOR,
+                            params.animate_curve,
+                            params.show_acc_vector_in_plot,
+                        );
+                    });
             });
 
         CentralPanel::default()
@@ -282,16 +349,16 @@ fn draw_sidebar(ui: &mut Ui, app: &mut SplineApp) -> bool {
     let mut changed = false;
     let params = &mut app.params;
 
-    ui.add_space(5.0);
+    ui.add_space(WIDGET_SPACING);
     ui.checkbox(&mut params.show_control_lines, "show control lines");
     ui.checkbox(&mut params.show_control_points, "show control points");
 
-    ui.add_space(10.0);
+    ui.add_space(WIDGET_SPACING);
     ui.checkbox(&mut params.show_lerp_lines, "show construction lines");
     ui.checkbox(&mut params.show_lerp_points, "show construction points");
     ui.checkbox(&mut params.show_last_lerp_point, "show constructed point");
 
-    ui.add_space(10.0);
+    ui.add_space(WIDGET_SPACING);
     ui.checkbox(
         &mut params.show_velocity_vector_on_curve,
         "show velocity vector on curve",
@@ -301,8 +368,22 @@ fn draw_sidebar(ui: &mut Ui, app: &mut SplineApp) -> bool {
         "show acceleration vector on curve",
     );
 
-    ui.add_space(10.0);
-    ui.checkbox(&mut params.animate, "animate");
+    ui.add_space(WIDGET_SPACING);
+    ui.horizontal(|ui| {
+        ui.selectable_value(&mut params.movement_direction, -1.0, "\u{23ea}");
+        let play_pause = if params.animate {
+            "\u{23f8}"
+        } else {
+            "\u{25b6}"
+        };
+        if ui.add(Button::new(play_pause)).clicked() {
+            params.animate.toggle();
+        }
+        ui.selectable_value(&mut params.movement_direction, 1.0, "\u{23e9}");
+    });
+    ui.checkbox(&mut params.wrap_animation, "wrap animation");
+    ui.checkbox(&mut params.animate_curve, "animate curve");
+    ui.checkbox(&mut params.animate_constant_speed, "constant speed");
     ui.horizontal(|ui| {
         ui.add(
             DragValue::new(&mut params.animation_time)
@@ -311,14 +392,6 @@ fn draw_sidebar(ui: &mut Ui, app: &mut SplineApp) -> bool {
         );
         ui.label("animation time");
     });
-    ui.checkbox(&mut params.wrap_animation, "wrap animation");
-    ui.horizontal(|ui| {
-        ui.label("direction");
-        ui.selectable_value(&mut params.movement_direction, -1.0, "-1");
-        ui.selectable_value(&mut params.movement_direction, 1.0, "+1");
-    });
-    ui.checkbox(&mut params.animate_curve, "animate curve");
-    ui.checkbox(&mut params.animate_constant_speed, "constant speed");
 
     ui.horizontal(|ui| {
         let slider = Slider::new(&mut params.u, 0.0..=1.0)
@@ -339,7 +412,7 @@ fn draw_sidebar(ui: &mut Ui, app: &mut SplineApp) -> bool {
         ui.label("u constant speed");
     });
 
-    ui.add_space(10.0);
+    ui.add_space(WIDGET_SPACING);
     ui.horizontal(|ui| {
         changed |= ui
             .add(DragValue::new(&mut params.num_line_segments).clamp_range(1..=1000))
@@ -347,7 +420,7 @@ fn draw_sidebar(ui: &mut Ui, app: &mut SplineApp) -> bool {
         ui.label("line segments");
     });
 
-    ui.add_space(10.0);
+    ui.add_space(WIDGET_SPACING);
     ui.horizontal(|ui| {
         if ui.button("-").clicked() && params.control_points.len() > 2 {
             let mid = (params.control_points.len() - 1) / 2;
@@ -372,7 +445,7 @@ fn draw_sidebar(ui: &mut Ui, app: &mut SplineApp) -> bool {
         });
     }
 
-    ui.add_space(10.0);
+    ui.add_space(WIDGET_SPACING);
     ui.checkbox(
         &mut params.show_velocity_vector_in_plot,
         "show velocity vector in plot",
@@ -381,55 +454,6 @@ fn draw_sidebar(ui: &mut Ui, app: &mut SplineApp) -> bool {
         &mut params.show_acc_vector_in_plot,
         "show acceleration vector in plot",
     );
-
-    ui.add_space(10.0);
-    Plot::new("distance_table")
-        .show_axes(false)
-        .data_aspect(1.0)
-        .view_aspect(1.0)
-        .legend(
-            Legend::default()
-                .background_alpha(0.5)
-                .position(Corner::LeftTop),
-        )
-        .show(ui, |ui| {
-            let out = &app.output;
-            let values = out.distance_table.iter().enumerate().map(|(i, d)| {
-                let n = out.distance_table.len() - 1;
-                let x = i as f64 / n as f64;
-                [x, *d as f64]
-            });
-            let points = PlotPoints::from_iter(values);
-            let line = Line::new(points)
-                .name("1. distance map")
-                .color(DISTANCE_MAP_COLOR)
-                .width(2.0);
-            ui.line(line);
-
-            // velocity curve
-            draw_vector_curve(
-                ui,
-                "2. velocity",
-                &out.velocity_curve,
-                out.current_velocity,
-                out.animate_curve_idx,
-                VELOCITY_COLOR,
-                params.animate_curve,
-                params.show_velocity_vector_in_plot,
-            );
-
-            // acc curve
-            draw_vector_curve(
-                ui,
-                "3. acceleration",
-                &out.acc_curve,
-                out.current_acc,
-                out.animate_curve_idx,
-                ACC_COLOR,
-                params.animate_curve,
-                params.show_acc_vector_in_plot,
-            );
-        });
 
     changed
 }

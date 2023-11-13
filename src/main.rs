@@ -2,10 +2,10 @@ use eframe::{CreationContext, NativeOptions};
 use egui::emath::Rot2;
 use egui::scroll_area::ScrollBarVisibility;
 use egui::{
-    Align2, Button, CentralPanel, Color32, DragValue, FontFamily, FontId, Frame, Id, Key,
+    Align2, Button, CentralPanel, Color32, DragValue, FontFamily, FontId, Frame, Id, Key, Margin,
     Modifiers, Painter, Pos2, Rect, ScrollArea, Sense, SidePanel, Slider, Stroke, Ui, Vec2,
 };
-use egui_plot::{Arrows, Corner, Legend, Line, Plot, PlotPoints, PlotUi};
+use egui_plot::{Arrows, Corner, Legend, Line, Plot, PlotBounds, PlotPoints, PlotUi};
 use serde_derive::{Deserialize, Serialize};
 
 const DISTANCE_MAP_COLOR: Color32 = Color32::from_rgb(0xF0, 0x60, 0x80);
@@ -149,6 +149,11 @@ impl eframe::App for SplineApp {
         });
 
         SidePanel::right("settings")
+            .frame(
+                Frame::none()
+                    .fill(Color32::from_gray(0x16))
+                    .outer_margin(Margin::same(WIDGET_SPACING)),
+            )
             .resizable(false)
             .show_separator_line(false)
             .exact_width(400.0)
@@ -167,6 +172,9 @@ impl eframe::App for SplineApp {
                 Plot::new("distance_table")
                     .height(ui.available_width())
                     .show_axes(false)
+                    .allow_scroll(false)
+                    .allow_drag(false)
+                    .allow_zoom(false)
                     .data_aspect(1.0)
                     .view_aspect(1.0)
                     .legend(
@@ -175,6 +183,8 @@ impl eframe::App for SplineApp {
                             .position(Corner::LeftTop),
                     )
                     .show(ui, |ui| {
+                        ui.set_plot_bounds(PlotBounds::from_min_max([-0.1; 2], [1.1; 2]));
+
                         let params = &self.params;
                         let out = &self.output;
                         let values = out.distance_table.iter().enumerate().map(|(i, d)| {
@@ -349,7 +359,6 @@ fn draw_sidebar(ui: &mut Ui, app: &mut SplineApp) -> bool {
     let mut changed = false;
     let params = &mut app.params;
 
-    ui.add_space(WIDGET_SPACING);
     ui.checkbox(&mut params.show_control_lines, "show control lines");
     ui.checkbox(&mut params.show_control_points, "show control points");
 

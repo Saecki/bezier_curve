@@ -1,3 +1,6 @@
+use std::cmp::Ordering;
+use std::f32::consts::TAU;
+
 use eframe::{CreationContext, NativeOptions};
 use egui::emath::Rot2;
 use egui::scroll_area::ScrollBarVisibility;
@@ -11,11 +14,16 @@ use serde_derive::{Deserialize, Serialize};
 #[cfg(test)]
 mod test;
 
-const DISTANCE_MAP_COLOR: Color32 = Color32::from_rgb(0xF0, 0x60, 0x80);
-const CURVATURE_COLOR: Color32 = Color32::from_rgb(0x70, 0xF0, 0x20);
+const DISTANCE_MAP_COLOR: Color32 = Color32::from_rgb(0x70, 0xF0, 0x20);
 const VELOCITY_COLOR: Color32 = Color32::from_rgb(0xF0, 0xB0, 0x20);
 const ACC_COLOR: Color32 = Color32::from_rgb(0x20, 0xB0, 0xF0);
+const CURVATURE_COLOR: Color32 = Color32::from_rgb(0xFF, 0x50, 0xF0);
 const WIDGET_SPACING: f32 = 8.0;
+
+const CONTROL_POINT_RADIUS: f32 = 12.5;
+const POINT_RADIUS: f32 = 8.0;
+const VELOCITY_SCALE: f32 = 0.1;
+const ACC_SCALE: f32 = 0.025;
 
 fn main() {
     let native_options = NativeOptions {
@@ -46,7 +54,7 @@ impl Default for SplineApp {
                 Pos2::new(550.0, 100.0),
                 Pos2::new(600.0, 400.0),
             ],
-            num_line_segments: 50,
+            num_line_segments: 250,
             show_control_lines: true,
             show_control_points: true,
             show_lerp_lines: true,
@@ -54,6 +62,7 @@ impl Default for SplineApp {
             show_last_lerp_point: true,
             show_velocity_vector_on_curve: false,
             show_acc_vector_on_curve: false,
+            show_curvature_circle_on_curve: false,
             show_velocity_vector_in_plot: false,
             show_acc_vector_in_plot: false,
             animate: false,
@@ -95,6 +104,7 @@ struct Params {
     show_last_lerp_point: bool,
     show_velocity_vector_on_curve: bool,
     show_acc_vector_on_curve: bool,
+    show_curvature_circle_on_curve: bool,
     show_velocity_vector_in_plot: bool,
     show_acc_vector_in_plot: bool,
     animate: bool,
@@ -138,11 +148,6 @@ impl eframe::App for SplineApp {
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        let control_point_radius = 12.5;
-        let point_radius = 8.0;
-        let velocity_scale = 0.1;
-        let acc_scale = 0.025;
-
         let mut changed = false;
 
         ctx.input_mut(|i| {
@@ -186,129 +191,7 @@ impl eframe::App for SplineApp {
         CentralPanel::default()
             .frame(Frame::none().fill(Color32::from_gray(0x20)))
             .show(ctx, |ui| {
-                let params = &mut self.params;
-
-                let clamp_margin = Vec2::splat(control_point_radius);
-                let clamp_min = clamp_margin.to_pos2();
-                let clamp_max = (ui.available_size() - clamp_margin).to_pos2();
-                for (i, pos) in params.control_points.iter_mut().enumerate() {
-                    let rect = Rect::from_center_size(*pos, Vec2::splat(2.0 * point_radius));
-                    let resp = ui.interact(rect, Id::new("control_point").with(i), Sense::drag());
-                    if resp.dragged() {
-                        *pos += resp.drag_delta();
-
-                        changed = true;
-                    }
-
-                    // clamp inside screen bounds
-                    *pos = pos.clamp(clamp_min, clamp_max);
-                }
-
-                if params.animate {
-                    // force refresh when animating
-                    ui.ctx().request_repaint();
-
-                    let delta = ui.input(|i| i.stable_dt) / params.animation_time;
-                    params.u += params.movement_direction * delta;
-                    params.u = params.u.clamp(0.0, 1.0);
-
-                    if params.u == 1.0 {
-                        if params.wrap_animation {
-                            params.u = 0.0;
-                        } else {
-                            params.movement_direction = -1.0;
-                        }
-                    } else if params.u == 0.0 {
-                        if params.wrap_animation {
-                            params.u = 1.0;
-                        } else {
-                            params.movement_direction = 1.0;
-                        }
-                    }
-                    changed = true;
-                }
-
-                if changed {
-                    self.output = compute(params);
-                }
-
-                let out = &self.output;
-                let clip_rect = Rect::from_min_size(ui.cursor().min, ui.available_size());
-                let painter = ui.painter_at(clip_rect);
-
-                // curve
-                let curve_stroke = Stroke::new(3.0, Color32::GREEN);
-                if !params.animate_curve {
-                    for p in out.curve_points.windows(2) {
-                        painter.line_segment([p[0], p[1]], curve_stroke);
-                    }
-                } else {
-                    for p in out.curve_points[0..=out.animate_curve_idx].windows(2) {
-                        painter.line_segment([p[0], p[1]], curve_stroke);
-                    }
-                    let last_point = out.curve_points[out.animate_curve_idx];
-                    let lerp_point = out.constructed_point();
-                    painter.line_segment([last_point, lerp_point], curve_stroke);
-                }
-
-                // control point lines
-                if params.show_control_lines {
-                    for p in params.control_points.windows(2) {
-                        let stroke = Stroke::new(2.0, Color32::BLUE);
-                        painter.line_segment([p[0], p[1]], stroke);
-                    }
-                }
-
-                // vectors
-                if params.show_velocity_vector_on_curve {
-                    let stroke = Stroke::new(2.0, VELOCITY_COLOR);
-                    let lerp_point = out.constructed_point();
-                    let v = params.movement_direction * velocity_scale * out.current_velocity;
-                    draw_arrow(&painter, lerp_point, v, 20.0, stroke);
-                }
-                if params.show_acc_vector_on_curve {
-                    let stroke = Stroke::new(2.0, ACC_COLOR);
-                    let lerp_point = out.constructed_point();
-                    let v = acc_scale * out.current_acc;
-                    draw_arrow(&painter, lerp_point, v, 20.0, stroke);
-                }
-
-                // interpolated points
-                for points in out.lerp_points.iter() {
-                    if params.show_lerp_lines {
-                        for p in points.windows(2) {
-                            let stroke = Stroke::new(1.0, Color32::LIGHT_BLUE);
-                            painter.line_segment([p[0], p[1]], stroke);
-                        }
-                    }
-
-                    if points.len() == 1 {
-                        if params.show_last_lerp_point {
-                            let color = Color32::from_rgb(0xF0, 0x20, 0xF0);
-                            painter.circle_filled(points[0], point_radius, color);
-                        }
-                    } else if params.show_lerp_points {
-                        for p in points.iter() {
-                            painter.circle_filled(*p, point_radius, Color32::GOLD);
-                        }
-                    }
-                }
-
-                // control points
-                if params.show_control_points {
-                    for (i, p) in params.control_points.iter().enumerate() {
-                        painter.circle_filled(*p, control_point_radius, Color32::RED);
-                        let font =
-                            FontId::new(1.5 * control_point_radius, FontFamily::Proportional);
-                        painter.text(
-                            *p,
-                            Align2::CENTER_CENTER,
-                            i.to_string(),
-                            font,
-                            Color32::WHITE,
-                        );
-                    }
-                }
+                main_content(ui, self, changed);
             });
     }
 }
@@ -333,6 +216,10 @@ fn draw_sidebar(ui: &mut Ui, app: &mut SplineApp) -> bool {
     ui.checkbox(
         &mut params.show_acc_vector_on_curve,
         "show acceleration vector on curve",
+    );
+    ui.checkbox(
+        &mut params.show_curvature_circle_on_curve,
+        "show curvature circle on curve",
     );
 
     ui.add_space(WIDGET_SPACING);
@@ -401,6 +288,8 @@ fn draw_sidebar(ui: &mut Ui, app: &mut SplineApp) -> bool {
             params.control_points.insert(mid + 1, mid_point);
             changed = true;
         }
+
+        ui.heading("Curve points");
     });
 
     for (i, p) in params.control_points.iter().enumerate() {
@@ -587,15 +476,6 @@ fn draw_spacial_plots(ui: &mut Ui, app: &SplineApp) {
         });
 }
 
-fn draw_arrow(painter: &Painter, origin: Pos2, vec: Vec2, tip_length: f32, stroke: Stroke) {
-    let rot = Rot2::from_angle(std::f32::consts::TAU / 10.0);
-    let tip = origin + vec;
-    let dir = vec.normalized();
-    painter.line_segment([origin, tip], stroke);
-    painter.line_segment([tip, tip - tip_length * (rot * dir)], stroke);
-    painter.line_segment([tip, tip - tip_length * (rot.inverse() * dir)], stroke);
-}
-
 fn draw_vector_plot(
     ui: &mut PlotUi,
     name: &str,
@@ -637,6 +517,192 @@ fn draw_vector_plot(
             .highlight(true)
             .tip_length(15.0);
         ui.arrows(arrow);
+    }
+}
+
+fn main_content(ui: &mut Ui, app: &mut SplineApp, mut changed: bool) {
+    let params = &mut app.params;
+
+    let clamp_margin = Vec2::splat(CONTROL_POINT_RADIUS);
+    let clamp_min = clamp_margin.to_pos2();
+    let clamp_max = (ui.available_size() - clamp_margin).to_pos2();
+    for (i, pos) in params.control_points.iter_mut().enumerate() {
+        let rect = Rect::from_center_size(*pos, Vec2::splat(2.0 * POINT_RADIUS));
+        let resp = ui.interact(rect, Id::new("control_point").with(i), Sense::drag());
+        if resp.dragged() {
+            *pos += resp.drag_delta();
+            changed = true;
+        }
+
+        // clamp inside screen bounds
+        *pos = pos.clamp(clamp_min, clamp_max);
+    }
+
+    if params.animate {
+        // force refresh when animating
+        ui.ctx().request_repaint();
+
+        let delta = ui.input(|i| i.stable_dt) / params.animation_time;
+        params.u += params.movement_direction * delta;
+        params.u = params.u.clamp(0.0, 1.0);
+
+        if params.u == 1.0 {
+            if params.wrap_animation {
+                params.u = 0.0;
+            } else {
+                params.movement_direction = -1.0;
+            }
+        } else if params.u == 0.0 {
+            if params.wrap_animation {
+                params.u = 1.0;
+            } else {
+                params.movement_direction = 1.0;
+            }
+        }
+        changed = true;
+    }
+
+    if changed {
+        app.output = compute(params);
+    }
+
+    let out = &app.output;
+    let clip_rect = Rect::from_min_size(ui.cursor().min, ui.available_size());
+    let painter = ui.painter_at(clip_rect);
+
+    // curve
+    let curve_stroke = Stroke::new(3.0, Color32::GREEN);
+    if !params.animate_curve {
+        for p in out.curve_points.windows(2) {
+            painter.line_segment([p[0], p[1]], curve_stroke);
+        }
+    } else {
+        for p in out.curve_points[0..=out.animate_curve_idx].windows(2) {
+            painter.line_segment([p[0], p[1]], curve_stroke);
+        }
+        let last_point = out.curve_points[out.animate_curve_idx];
+        let lerp_point = out.constructed_point();
+        painter.line_segment([last_point, lerp_point], curve_stroke);
+    }
+
+    // control point lines
+    if params.show_control_lines {
+        for p in params.control_points.windows(2) {
+            let stroke = Stroke::new(2.0, Color32::BLUE);
+            painter.line_segment([p[0], p[1]], stroke);
+        }
+    }
+
+    // vectors
+    if params.show_velocity_vector_on_curve {
+        let stroke = Stroke::new(2.0, VELOCITY_COLOR);
+        let lerp_point = out.constructed_point();
+        let v = params.movement_direction * VELOCITY_SCALE * out.current_velocity;
+        draw_arrow(&painter, lerp_point, v, 20.0, stroke);
+    }
+    if params.show_acc_vector_on_curve {
+        let stroke = Stroke::new(2.0, ACC_COLOR);
+        let lerp_point = out.constructed_point();
+        let v = ACC_SCALE * out.current_acc;
+        draw_arrow(&painter, lerp_point, v, 20.0, stroke);
+    }
+    // curvature circle
+    if params.show_curvature_circle_on_curve {
+        let stroke = Stroke::new(2.0, CURVATURE_COLOR);
+        let lerp_point = out.constructed_point();
+        let curvature = compute_curvature(out.current_velocity, out.current_acc);
+
+        let curvature_arc_length = 800.0;
+        match curvature.total_cmp(&0.0) {
+            Ordering::Less | Ordering::Greater => {
+                let signed_radius = 1.0 / curvature;
+                let v_norm = out.current_velocity.normalized();
+                let center = lerp_point + signed_radius * Vec2::new(-v_norm.y, v_norm.x);
+                draw_half_open_circle(
+                    &painter,
+                    lerp_point,
+                    center,
+                    signed_radius,
+                    curvature_arc_length,
+                    stroke,
+                );
+            }
+            Ordering::Equal => {
+                let l = out.current_velocity.normalized() * 0.5 * curvature_arc_length;
+                let start = lerp_point + l;
+                let end = lerp_point - l;
+                painter.line_segment([start, end], stroke);
+            }
+        }
+    }
+
+    // interpolated points
+    for points in out.lerp_points.iter() {
+        if params.show_lerp_lines {
+            for p in points.windows(2) {
+                let stroke = Stroke::new(1.0, Color32::LIGHT_BLUE);
+                painter.line_segment([p[0], p[1]], stroke);
+            }
+        }
+
+        if points.len() == 1 {
+            if params.show_last_lerp_point {
+                let color = Color32::from_rgb(0xF0, 0x20, 0xF0);
+                painter.circle_filled(points[0], POINT_RADIUS, color);
+            }
+        } else if params.show_lerp_points {
+            for p in points.iter() {
+                painter.circle_filled(*p, POINT_RADIUS, Color32::GOLD);
+            }
+        }
+    }
+
+    // control points
+    if params.show_control_points {
+        for (i, p) in params.control_points.iter().enumerate() {
+            painter.circle_filled(*p, CONTROL_POINT_RADIUS, Color32::RED);
+            let font = FontId::new(1.5 * CONTROL_POINT_RADIUS, FontFamily::Proportional);
+            painter.text(
+                *p,
+                Align2::CENTER_CENTER,
+                i.to_string(),
+                font,
+                Color32::WHITE,
+            );
+        }
+    }
+}
+
+fn draw_arrow(painter: &Painter, origin: Pos2, vec: Vec2, tip_length: f32, stroke: Stroke) {
+    let rot = Rot2::from_angle(std::f32::consts::TAU / 10.0);
+    let tip = origin + vec;
+    let dir = vec.normalized();
+    painter.line_segment([origin, tip], stroke);
+    painter.line_segment([tip, tip - tip_length * (rot * dir)], stroke);
+    painter.line_segment([tip, tip - tip_length * (rot.inverse() * dir)], stroke);
+}
+
+fn draw_half_open_circle(
+    painter: &Painter,
+    curve_point: Pos2,
+    center: Pos2,
+    signed_radius: f32,
+    arc_length: f32,
+    stroke: Stroke,
+) {
+    let radius = signed_radius.abs();
+    let arc_angle_range = TAU * (arc_length / (TAU * radius));
+
+    let neutral_angle = (curve_point - center).angle();
+    let start_angle = neutral_angle - 0.5 * arc_angle_range;
+    for i in 0..100 {
+        let a = i as f32 / 100.0;
+        let b = (i + 1) as f32 / 100.0;
+        let angle_a = start_angle + a * arc_angle_range;
+        let angle_b = start_angle + b * arc_angle_range;
+        let point_a = center + Vec2::splat(radius) * Vec2::new(angle_a.cos(), angle_a.sin());
+        let point_b = center + Vec2::splat(radius) * Vec2::new(angle_b.cos(), angle_b.sin());
+        painter.line_segment([point_a, point_b], stroke);
     }
 }
 
@@ -749,14 +815,6 @@ fn weight(u: f32, n: usize, i: usize) -> f32 {
     coefficient as f32 * u.powi(i as i32) * (1.0 - u).powi((n - i) as i32)
 }
 
-fn factorial(n: usize) -> usize {
-    match n {
-        0 => 1,
-        1 => 1,
-        _ => (2..=n).product(),
-    }
-}
-
 fn compute_lerp_points(u: f32, control_points: &[Pos2]) -> Vec<Vec<Pos2>> {
     let mut interp_points = vec![lerp(u, control_points)];
     for i in 1..control_points.len() - 1 {
@@ -796,14 +854,22 @@ fn compute_constant_speed_u(u: f32, distance_table: &[f32]) -> f32 {
     remap(u, in_a, in_b, out_a, out_b)
 }
 
+fn find_last_line_idx(u: f32, points: &[Pos2]) -> usize {
+    let n = (points.len() - 1) as f32;
+    (u * n).floor() as usize
+}
+
 fn remap(val: f32, in_a: f32, in_b: f32, out_a: f32, out_b: f32) -> f32 {
     let norm = (val - in_a) / (in_b - in_a);
     out_a + norm * (out_b - out_a)
 }
 
-fn find_last_line_idx(u: f32, points: &[Pos2]) -> usize {
-    let n = (points.len() - 1) as f32;
-    (u * n).floor() as usize
+fn factorial(n: usize) -> usize {
+    match n {
+        0 => 1,
+        1 => 1,
+        _ => (2..=n).product(),
+    }
 }
 
 trait BoolExt {

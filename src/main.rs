@@ -13,7 +13,7 @@ use serde_derive::{Deserialize, Serialize};
 #[cfg(test)]
 mod test;
 
-const DISTANCE_MAP_COLOR: Color32 = Color32::from_rgb(0x70, 0xF0, 0x20);
+const DISTANCE_COLOR: Color32 = Color32::from_rgb(0x70, 0xF0, 0x20);
 const VELOCITY_COLOR: Color32 = Color32::from_rgb(0xF0, 0xB0, 0x20);
 const ACC_COLOR: Color32 = Color32::from_rgb(0x20, 0xB0, 0xF0);
 const CURVATURE_COLOR: Color32 = Color32::from_rgb(0xFF, 0x50, 0xF0);
@@ -354,7 +354,7 @@ fn draw_time_plots(ui: &mut Ui, app: &SplineApp) {
         .show(ui, |ui| {
             ui.set_plot_bounds(PlotBounds::from_min_max([-0.1; 2], [1.1; 2]));
 
-            // distance map
+            // distance
             let values = out.distance_table.iter().enumerate().map(|(i, d)| {
                 let n = out.distance_table.len() - 1;
                 let x = i as f64 / n as f64;
@@ -362,8 +362,8 @@ fn draw_time_plots(ui: &mut Ui, app: &SplineApp) {
             });
             let points = PlotPoints::from_iter(values);
             let line = Line::new(points)
-                .name("1. distance map")
-                .color(DISTANCE_MAP_COLOR)
+                .name("1. distance")
+                .color(DISTANCE_COLOR)
                 .width(2.0);
             ui.line(line);
 

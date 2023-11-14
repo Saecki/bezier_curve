@@ -1,4 +1,3 @@
-use std::cmp::Ordering;
 use std::f32::consts::TAU;
 
 use eframe::{CreationContext, NativeOptions};
@@ -63,6 +62,7 @@ impl Default for SplineApp {
             show_velocity_vector_on_curve: false,
             show_acc_vector_on_curve: false,
             show_curvature_circle_on_curve: false,
+            adaptive_curvature_color: false,
             show_velocity_vector_in_plot: false,
             show_acc_vector_in_plot: false,
             animate: false,
@@ -109,6 +109,7 @@ struct Params {
     show_velocity_vector_on_curve: bool,
     show_acc_vector_on_curve: bool,
     show_curvature_circle_on_curve: bool,
+    adaptive_curvature_color: bool,
     show_velocity_vector_in_plot: bool,
     show_acc_vector_in_plot: bool,
     animate: bool,
@@ -224,6 +225,10 @@ fn draw_sidebar(ui: &mut Ui, app: &mut SplineApp) -> bool {
     ui.checkbox(
         &mut params.show_curvature_circle_on_curve,
         "show curvature circle on curve",
+    );
+    ui.checkbox(
+        &mut params.adaptive_curvature_color,
+        "adaptive curvature color",
     );
 
     ui.add_space(WIDGET_SPACING);
@@ -610,33 +615,49 @@ fn main_content(ui: &mut Ui, app: &mut SplineApp, mut changed: bool) {
         let v = ACC_SCALE * out.current_acc;
         draw_arrow(&painter, lerp_point, v, 20.0, stroke);
     }
+
     // curvature circle
     if params.show_curvature_circle_on_curve {
-        let stroke = Stroke::new(2.0, CURVATURE_COLOR);
+        fn curvature_color_channel(c: f32) -> u8 {
+            let max_c = 0.04;
+            let normalized = c.clamp(0.0, max_c) / max_c;
+            let mapped = normalized.powf(0.3);
+            (255.0 * mapped).round() as u8
+        }
+
         let lerp_point = out.constructed_point();
         let curvature = compute_curvature(out.current_velocity, out.current_acc);
+        let radius = 1.0 / curvature;
+        let color = if params.adaptive_curvature_color {
+            let left = curvature_color_channel(curvature);
+            let right = curvature_color_channel(-curvature);
+            let r = 0xFF - left;
+            let b = 0xFF - right;
+            // let g = 0xFF_u8.saturating_sub(left).saturating_sub(right);
+            Color32::from_rgb(r, 0, b)
+        } else {
+            CURVATURE_COLOR
+        };
+        let stroke = Stroke::new(2.0, color);
 
         let curvature_arc_length = 800.0;
-        match curvature.total_cmp(&0.0) {
-            Ordering::Less | Ordering::Greater => {
-                let signed_radius = 1.0 / curvature;
-                let v_norm = out.current_velocity.normalized();
-                let center = lerp_point + signed_radius * Vec2::new(-v_norm.y, v_norm.x);
-                draw_half_open_circle(
-                    &painter,
-                    lerp_point,
-                    center,
-                    signed_radius,
-                    curvature_arc_length,
-                    stroke,
-                );
-            }
-            Ordering::Equal => {
-                let l = out.current_velocity.normalized() * 0.5 * curvature_arc_length;
-                let start = lerp_point + l;
-                let end = lerp_point - l;
-                painter.line_segment([start, end], stroke);
-            }
+        if radius.is_nan() {
+            let l = out.current_velocity.normalized() * 0.5 * curvature_arc_length;
+            let start = lerp_point + l;
+            let end = lerp_point - l;
+            painter.line_segment([start, end], stroke);
+        } else {
+            let signed_radius = 1.0 / curvature;
+            let v_norm = out.current_velocity.normalized();
+            let center = lerp_point + signed_radius * Vec2::new(-v_norm.y, v_norm.x);
+            draw_half_open_circle(
+                &painter,
+                lerp_point,
+                center,
+                signed_radius,
+                curvature_arc_length,
+                stroke,
+            );
         }
     }
 

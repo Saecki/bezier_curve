@@ -19,7 +19,7 @@ const ACC_COLOR: Color32 = Color32::from_rgb(0x20, 0xB0, 0xF0);
 const CURVATURE_COLOR: Color32 = Color32::from_rgb(0xFF, 0x50, 0xF0);
 const WIDGET_SPACING: f32 = 8.0;
 
-const CONTROL_POINT_RADIUS: f32 = 12.5;
+const CONTROL_POINT_RADIUS: f32 = 10.0;
 const POINT_RADIUS: f32 = 8.0;
 const VELOCITY_SCALE: f32 = 0.1;
 const ACC_SCALE: f32 = 0.025;
@@ -580,7 +580,7 @@ fn main_content(ui: &mut Ui, app: &mut SplineApp, mut changed: bool) {
     let painter = ui.painter_at(clip_rect);
 
     // curve
-    let curve_stroke = Stroke::new(3.0, Color32::GREEN);
+    let curve_stroke = Stroke::new(3.0, Color32::WHITE);
     if !params.animate_curve {
         for p in out.curve_points.windows(2) {
             painter.line_segment([p[0], p[1]], curve_stroke);
@@ -665,7 +665,7 @@ fn main_content(ui: &mut Ui, app: &mut SplineApp, mut changed: bool) {
     for points in out.lerp_points.iter() {
         if params.show_lerp_lines {
             for p in points.windows(2) {
-                let stroke = Stroke::new(1.0, Color32::LIGHT_BLUE);
+                let stroke = Stroke::new(1.0, Color32::GREEN);
                 painter.line_segment([p[0], p[1]], stroke);
             }
         }

@@ -81,6 +81,10 @@ impl Default for SplineApp {
 
 impl SplineApp {
     fn new(cc: &CreationContext) -> Self {
+        cc.egui_ctx.style_mut(|style| {
+            style.spacing.slider_width = 200.0;
+        });
+
         if let Some(storage) = cc.storage {
             if let Some(mut app) = eframe::get_value::<SplineApp>(storage, eframe::APP_KEY) {
                 app.output = compute(&app.params);
@@ -250,7 +254,7 @@ fn draw_sidebar(ui: &mut Ui, app: &mut SplineApp) -> bool {
     ui.horizontal(|ui| {
         let slider = Slider::new(&mut params.u, 0.0..=1.0)
             .fixed_decimals(4)
-            .drag_value_speed(0.002);
+            .drag_value_speed(0.0002);
         let resp = ui.add(slider);
         ui.label("u");
 
@@ -691,7 +695,7 @@ fn draw_half_open_circle(
     stroke: Stroke,
 ) {
     let radius = signed_radius.abs();
-    let arc_angle_range = TAU * (arc_length / (TAU * radius));
+    let arc_angle_range = (arc_length / radius).min(TAU);
 
     let neutral_angle = (curve_point - center).angle();
     let start_angle = neutral_angle - 0.5 * arc_angle_range;

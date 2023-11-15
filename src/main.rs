@@ -759,7 +759,7 @@ fn main_content(ui: &mut Ui, app: &mut SplineApp, mut changed: bool) {
         let stroke = Stroke::new(2.0, color);
 
         let curvature_arc_length = 800.0;
-        if radius.is_nan() {
+        if radius.is_infinite() {
             let l = out.current_velocity.normalized() * 0.5 * curvature_arc_length;
             let start = lerp_point + l;
             let end = lerp_point - l;

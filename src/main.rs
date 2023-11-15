@@ -6,8 +6,8 @@ use egui::emath::Rot2;
 use egui::scroll_area::ScrollBarVisibility;
 use egui::{
     Align, Align2, Button, CentralPanel, Color32, DragValue, FontFamily, FontId, Frame, Id, Key,
-    Label, LayerId, Layout, Margin, Modifiers, Painter, Pos2, Rect, Rounding, ScrollArea, Sense,
-    SidePanel, Slider, Stroke, Ui, Vec2,
+    Label, LayerId, Layout, Margin, Modifiers, Order, Painter, Pos2, Rect, RichText, Rounding,
+    ScrollArea, Sense, SidePanel, Slider, Stroke, Ui, Vec2,
 };
 use egui_plot::{Arrows, Corner, Legend, Line, Plot, PlotBounds, PlotPoint, PlotPoints, PlotUi};
 use serde_derive::{Deserialize, Serialize};
@@ -681,12 +681,13 @@ fn main_content(ui: &mut Ui, app: &mut SplineApp, mut changed: bool) {
     }
 
     let out = &app.output;
-    let mut clip_rect = Rect::from_min_size(ui.cursor().min, ui.available_size());
+    let available_rect = Rect::from_min_size(ui.cursor().min, ui.available_size());
+    let mut clip_rect = available_rect;
     if let Some(delta) = params.drag_delta {
         clip_rect = clip_rect.translate(-delta);
     }
-    let paint_layer = LayerId::new(egui::Order::Middle, Id::new("main_content"));
-    let painter = ui.painter_at(clip_rect).with_layer_id(paint_layer);
+    let main_layer_id = LayerId::new(Order::Middle, Id::new("main_content"));
+    let painter = ui.painter_at(clip_rect).with_layer_id(main_layer_id);
 
     // curve
     let curve_stroke = Stroke::new(3.0, Color32::WHITE);
@@ -817,7 +818,41 @@ fn main_content(ui: &mut Ui, app: &mut SplineApp, mut changed: bool) {
     }
 
     if let Some(delta) = params.drag_delta {
-        ui.ctx().translate_layer(paint_layer, delta);
+        ui.ctx().translate_layer(main_layer_id, delta);
+
+        // draw translation delta
+        let max = available_rect.right_bottom() - Vec2::splat(16.0);
+        let coord_size = Vec2::new(40.0, 16.0);
+        let box_size = Vec2::new(2.0 * 40.0 + 2.0 * 8.0 + 8.0, 16.0 + 2.0 * 8.0);
+        let min = max - box_size;
+        let rect = Rect::from_min_max(min, max);
+
+        let layer_id = LayerId::new(Order::Foreground, Id::new("drag_overlay"));
+        ui.with_layer_id(layer_id, |ui| {
+            ui.allocate_ui_at_rect(rect, |ui| {
+                Frame::none()
+                    .fill(Color32::from_rgba_unmultiplied(0x80, 0x80, 0x80, 0xF0))
+                    .rounding(Rounding::same(8.0))
+                    .inner_margin(8.0)
+                    .show(ui, |ui| {
+                        ui.horizontal_centered(|ui| {
+                            let layout =
+                                Layout::centered_and_justified(egui::Direction::LeftToRight)
+                                    .with_main_align(Align::RIGHT);
+                            let text_color = Color32::from_gray(0x20);
+                            let Vec2 { x, y } = delta;
+                            ui.allocate_ui_with_layout(coord_size, layout, |ui| {
+                                let text = RichText::new(format!("{x:.1}")).color(text_color);
+                                ui.add(Label::new(text));
+                            });
+                            ui.allocate_ui_with_layout(coord_size, layout, |ui| {
+                                let text = RichText::new(format!("{y:.1}")).color(text_color);
+                                ui.add(Label::new(text));
+                            });
+                        });
+                    });
+            });
+        });
     }
 }
 

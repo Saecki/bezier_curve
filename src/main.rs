@@ -6,8 +6,8 @@ use egui::emath::Rot2;
 use egui::scroll_area::ScrollBarVisibility;
 use egui::{
     Align2, Button, CentralPanel, Color32, DragValue, FontFamily, FontId, Frame, Id, Key, Label,
-    Layout, Margin, Modifiers, Painter, Pos2, Rect, Rounding, ScrollArea, Sense, SidePanel, Slider,
-    Stroke, Ui, Vec2,
+    LayerId, Layout, Margin, Modifiers, Painter, Pos2, Rect, Rounding, ScrollArea, Sense,
+    SidePanel, Slider, Stroke, Ui, Vec2,
 };
 use egui_plot::{Arrows, Corner, Legend, Line, Plot, PlotBounds, PlotPoint, PlotPoints, PlotUi};
 use serde_derive::{Deserialize, Serialize};
@@ -77,6 +77,7 @@ impl Default for SplineApp {
             movement_direction: 1.0,
             u: 0.3,
 
+            drag_delta: None,
             hovered_point: None,
         };
         let output = compute(&params);
@@ -126,6 +127,7 @@ struct Params {
     movement_direction: f32,
     u: f32,
 
+    drag_delta: Option<Vec2>,
     hovered_point: Option<RangeInclusive<usize>>,
 }
 
@@ -173,6 +175,25 @@ impl eframe::App for SplineApp {
                 self.params.animation_time += 0.1;
             } else if i.consume_key(Modifiers::COMMAND, Key::ArrowDown) {
                 self.params.animation_time -= 0.1;
+            }
+
+            if i.pointer.is_decidedly_dragging() {
+                self.params.drag_delta = if let (true, Some(origin), Some(pos)) = (
+                    i.pointer.middle_down(),
+                    i.pointer.press_origin(),
+                    i.pointer.interact_pos(),
+                ) {
+                    Some(pos - origin)
+                } else {
+                    // drag released
+                    if let Some(delta) = self.params.drag_delta {
+                        for p in self.params.control_points.iter_mut() {
+                            *p += delta;
+                        }
+                    }
+                    changed = true;
+                    None
+                };
             }
         });
 
@@ -660,8 +681,12 @@ fn main_content(ui: &mut Ui, app: &mut SplineApp, mut changed: bool) {
     }
 
     let out = &app.output;
-    let clip_rect = Rect::from_min_size(ui.cursor().min, ui.available_size());
-    let painter = ui.painter_at(clip_rect);
+    let mut clip_rect = Rect::from_min_size(ui.cursor().min, ui.available_size());
+    if let Some(delta) = params.drag_delta {
+        clip_rect = clip_rect.translate(-delta);
+    }
+    let paint_layer = LayerId::new(egui::Order::Middle, Id::new("main_content"));
+    let painter = ui.painter_at(clip_rect).with_layer_id(paint_layer);
 
     // curve
     let curve_stroke = Stroke::new(3.0, Color32::WHITE);
@@ -789,6 +814,10 @@ fn main_content(ui: &mut Ui, app: &mut SplineApp, mut changed: bool) {
                 Color32::WHITE,
             );
         }
+    }
+
+    if let Some(delta) = params.drag_delta {
+        ui.ctx().translate_layer(paint_layer, delta);
     }
 }
 

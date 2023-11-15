@@ -1,11 +1,13 @@
 use std::f32::consts::TAU;
+use std::ops::RangeInclusive;
 
 use eframe::{CreationContext, NativeOptions};
 use egui::emath::Rot2;
 use egui::scroll_area::ScrollBarVisibility;
 use egui::{
-    Align2, Button, CentralPanel, Color32, DragValue, FontFamily, FontId, Frame, Id, Key, Margin,
-    Modifiers, Painter, Pos2, Rect, ScrollArea, Sense, SidePanel, Slider, Stroke, Ui, Vec2,
+    Align2, Button, CentralPanel, Color32, DragValue, FontFamily, FontId, Frame, Id, Key, Label,
+    Layout, Margin, Modifiers, Painter, Pos2, Rect, Rounding, ScrollArea, Sense, SidePanel, Slider,
+    Stroke, Ui, Vec2,
 };
 use egui_plot::{Arrows, Corner, Legend, Line, Plot, PlotBounds, PlotPoint, PlotPoints, PlotUi};
 use serde_derive::{Deserialize, Serialize};
@@ -70,9 +72,12 @@ impl Default for SplineApp {
             wrap_animation: false,
             animate_constant_speed: false,
             animate_curve: false,
+
             plot_tab: PlotTab::Time,
             movement_direction: 1.0,
             u: 0.3,
+
+            hovered_point: None,
         };
         let output = compute(&params);
         Self { params, output }
@@ -120,6 +125,8 @@ struct Params {
     plot_tab: PlotTab,
     movement_direction: f32,
     u: f32,
+
+    hovered_point: Option<RangeInclusive<usize>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -232,6 +239,16 @@ fn draw_sidebar(ui: &mut Ui, app: &mut SplineApp) -> bool {
     );
 
     ui.add_space(WIDGET_SPACING);
+    ui.checkbox(
+        &mut params.show_velocity_vector_in_plot,
+        "show velocity vector in plot",
+    );
+    ui.checkbox(
+        &mut params.show_acc_vector_in_plot,
+        "show acceleration vector in plot",
+    );
+
+    ui.add_space(WIDGET_SPACING);
     ui.horizontal(|ui| {
         ui.selectable_value(&mut params.movement_direction, -1.0, "\u{23ea}");
         let play_pause = if params.animate {
@@ -283,42 +300,109 @@ fn draw_sidebar(ui: &mut Ui, app: &mut SplineApp) -> bool {
         ui.label("line segments");
     });
 
+    // curve points
     ui.add_space(WIDGET_SPACING);
-    ui.horizontal(|ui| {
-        if ui.button("-").clicked() && params.control_points.len() > 2 {
-            let mid = (params.control_points.len() - 1) / 2;
-            params.control_points.remove(mid);
-            changed = true;
+    ui.heading("Curve points");
+
+    let resp = {
+        let (id, rect) = ui.allocate_space(Vec2::new(200.0, 4.0));
+        let resp = ui.interact(rect, id, Sense::hover());
+        if resp.hovered() {
+            let painter = ui.painter();
+            painter.rect_filled(rect, Rounding::same(2.0), Color32::GRAY);
         }
-
-        if ui.button("+").clicked() {
-            let mid = (params.control_points.len() - 1) / 2;
-            let mid_point = params.control_points[mid].lerp(params.control_points[mid + 1], 0.5);
-            params.control_points.insert(mid + 1, mid_point);
-            changed = true;
-        }
-
-        ui.heading("Curve points");
-    });
-
-    for (i, p) in params.control_points.iter().enumerate() {
-        ui.horizontal(|ui| {
-            ui.label(format!("{i}"));
-
-            let Pos2 { x, y } = p;
-            ui.label(format!("({x}, {y})"));
-        });
+        resp
+    };
+    if resp.clicked() {
+        let dir = app.output.velocity_curve.first().unwrap().normalized();
+        let offset = -2.5 * CONTROL_POINT_RADIUS * dir;
+        let pos = *params.control_points.first().unwrap() + offset;
+        params.control_points.insert(0, pos);
+        changed = true;
     }
 
-    ui.add_space(WIDGET_SPACING);
-    ui.checkbox(
-        &mut params.show_velocity_vector_in_plot,
-        "show velocity vector in plot",
-    );
-    ui.checkbox(
-        &mut params.show_acc_vector_in_plot,
-        "show acceleration vector in plot",
-    );
+    params.hovered_point = None;
+    let mut i = 0;
+    while i < params.control_points.len() {
+        let p = &params.control_points[i];
+
+        let mut removed = false;
+        let resp = Frame::none()
+            .rounding(Rounding::same(4.0))
+            .fill(Color32::from_gray(0x20))
+            .show(ui, |ui| {
+                ui.allocate_space(Vec2::new(200.0, 0.0));
+                ui.horizontal(|ui| {
+                    removed = ui
+                        .add_sized(
+                            Vec2::new(20.0, ui.style().spacing.interact_size.y),
+                            Button::new("\u{1f5d9}").fill(Color32::TRANSPARENT),
+                        )
+                        .clicked();
+
+                    ui.add_sized(
+                        Vec2::new(20.0, ui.style().spacing.interact_size.y),
+                        Label::new(format!("{i}")),
+                    );
+
+                    ui.add_space(20.0);
+
+                    let Pos2 { x, y } = p;
+                    ui.allocate_ui(Vec2::new(50.0, ui.style().spacing.interact_size.y), |ui| {
+                        ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.label(format!("{x:.2}"));
+                        });
+                    });
+                    ui.allocate_ui(Vec2::new(50.0, ui.style().spacing.interact_size.y), |ui| {
+                        ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.label(format!("{y:.2}"));
+                        });
+                    });
+                })
+                .response
+            })
+            .inner;
+
+        if resp.hovered() {
+            params.hovered_point = Some(i..=i);
+        }
+
+        let resp = {
+            let (id, rect) = ui.allocate_space(Vec2::new(200.0, 4.0));
+            let resp = ui.interact(rect, id, Sense::hover());
+            if resp.hovered() {
+                let painter = ui.painter();
+                painter.rect_filled(rect, Rounding::same(2.0), Color32::GRAY);
+            }
+            resp
+        };
+        let resp = ui.interact(resp.rect, Id::new("add_point").with(i), Sense::click());
+        if resp.clicked() {
+            if i < params.control_points.len() - 1 {
+                let mid_point = params.control_points[i].lerp(params.control_points[i + 1], 0.5);
+                params.control_points.insert(i + 1, mid_point);
+            } else {
+                let dir = app.output.velocity_curve.last().unwrap().normalized();
+                let offset = 2.5 * CONTROL_POINT_RADIUS * dir;
+                let point = *params.control_points.last().unwrap() + offset;
+                params.control_points.push(point);
+            }
+            changed = true;
+        }
+        if resp.hovered() {
+            if i < params.control_points.len() - 1 {
+                params.hovered_point = Some(i..=i + 1);
+            } else {
+                params.hovered_point = Some(i..=i);
+            }
+        }
+
+        if removed {
+            params.control_points.remove(i);
+        } else {
+            i += 1;
+        }
+    }
 
     changed
 }
@@ -685,8 +769,18 @@ fn main_content(ui: &mut Ui, app: &mut SplineApp, mut changed: bool) {
     // control points
     if params.show_control_points {
         for (i, p) in params.control_points.iter().enumerate() {
-            painter.circle_filled(*p, CONTROL_POINT_RADIUS, Color32::RED);
-            let font = FontId::new(1.5 * CONTROL_POINT_RADIUS, FontFamily::Proportional);
+            let mut fill = Color32::RED;
+            let mut stroke = Stroke::new(2.0, Color32::TRANSPARENT);
+            if params
+                .hovered_point
+                .as_ref()
+                .is_some_and(|r| r.contains(&i))
+            {
+                fill = Color32::from_rgb(0xFF, 0x50, 0x30);
+                stroke.color = Color32::WHITE;
+            }
+            painter.circle(*p, CONTROL_POINT_RADIUS, fill, stroke);
+            let font = FontId::new(1.2 * CONTROL_POINT_RADIUS, FontFamily::Proportional);
             painter.text(
                 *p,
                 Align2::CENTER_CENTER,

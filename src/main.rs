@@ -593,8 +593,8 @@ fn draw_spacial_plots(ui: &mut Ui, app: &SplineApp) {
                 ui,
                 "2. velocity",
                 &out.velocity_curve,
-                out.current_velocity,
                 out.animate_curve_idx,
+                out.current_velocity,
                 VELOCITY_COLOR,
                 params.animate_curve,
                 params.show_velocity_vector_in_plot,
@@ -605,8 +605,8 @@ fn draw_spacial_plots(ui: &mut Ui, app: &SplineApp) {
                 ui,
                 "3. acceleration",
                 &out.acc_curve,
-                out.current_acc,
                 out.animate_curve_idx,
+                out.current_acc,
                 ACC_COLOR,
                 params.animate_curve,
                 params.show_acc_vector_in_plot,
@@ -618,8 +618,8 @@ fn draw_vector_plot(
     ui: &mut PlotUi,
     name: &str,
     values: &[Vec2],
-    current: Vec2,
     current_idx: usize,
+    current: Vec2,
     color: Color32,
     animate: bool,
     show_vector: bool,
@@ -632,7 +632,7 @@ fn draw_vector_plot(
     let max = values
         .iter()
         .map(|v| v.abs().max_elem())
-        .max_by(|a, b| a.total_cmp(&b))
+        .max_by(|a, b| a.total_cmp(b))
         .unwrap();
     let scale = 0.5 / max;
     let points = if !animate {
@@ -940,7 +940,10 @@ fn compute(params: &Params) -> Output {
         params.u
     };
     let lerp_points = compute_lerp_points(u, &params.control_points);
-    let animate_curve_idx = find_last_line_idx(u, &curve_points);
+    let animate_curve_idx = {
+        let n = (curve_points.len() - 1) as f32;
+        (u * n).floor() as usize
+    };
     let current_velocity = compute_velocity(u, &params.control_points);
     let current_acc = compute_acc(u, &params.control_points);
     Output {
@@ -960,17 +963,17 @@ fn compute_points(control_points: &[Pos2], num_line_segments: u32) -> Vec<Pos2> 
     let mut line = Vec::new();
     for i in 0..=num_line_segments {
         let u = i as f32 / num_line_segments as f32;
-        let point = compute_point(u, control_points);
+        let point = compute_position(u, control_points);
         line.push(point);
     }
     line
 }
 
-fn compute_point(u: f32, control_points: &[Pos2]) -> Pos2 {
+fn compute_position(u: f32, control_points: &[Pos2]) -> Pos2 {
     let n = control_points.len() - 1;
     let mut accum = Pos2::ZERO;
     for (i, p) in control_points.iter().enumerate() {
-        let weight = weight(u, n, i);
+        let weight = bernstein_weight(u, n, i);
         accum += weight * p.to_vec2();
     }
     accum
@@ -994,7 +997,7 @@ fn compute_velocity(u: f32, control_points: &[Pos2]) -> Vec2 {
     let n = control_points.len() - 1;
     let mut accum = Vec2::ZERO;
     for (i, p) in control_points.windows(2).enumerate() {
-        let weight = weight(u, n - 1, i);
+        let weight = bernstein_weight(u, n - 1, i);
         accum += weight * (p[1] - p[0]);
     }
     n as f32 * accum
@@ -1004,7 +1007,7 @@ fn compute_acc(u: f32, control_points: &[Pos2]) -> Vec2 {
     let n = control_points.len() - 1;
     let mut accum = Vec2::ZERO;
     for (i, p) in control_points.windows(3).enumerate() {
-        let weight = weight(u, n - 2, i);
+        let weight = bernstein_weight(u, n - 2, i);
         accum += weight * ((p[2] - p[1]) - (p[1] - p[0]));
     }
     (n * (n - 1)) as f32 * accum
@@ -1014,7 +1017,7 @@ fn compute_curvature(v: Vec2, a: Vec2) -> f32 {
     (v.x * a.y - v.y * a.x) / (v.x * v.x + v.y * v.y).powf(1.5)
 }
 
-fn weight(u: f32, n: usize, i: usize) -> f32 {
+fn bernstein_weight(u: f32, n: usize, i: usize) -> f32 {
     let coefficient = (factorial(n)) / (factorial(n - i) * factorial(i));
     coefficient as f32 * u.powi(i as i32) * (1.0 - u).powi((n - i) as i32)
 }
@@ -1056,11 +1059,6 @@ fn compute_constant_speed_u(u: f32, distance_table: &[f32]) -> f32 {
     let out_b = (i) as f32 / (distance_table.len() - 1) as f32;
 
     remap(u, in_a, in_b, out_a, out_b)
-}
-
-fn find_last_line_idx(u: f32, points: &[Pos2]) -> usize {
-    let n = (points.len() - 1) as f32;
-    (u * n).floor() as usize
 }
 
 fn remap(val: f32, in_a: f32, in_b: f32, out_a: f32, out_b: f32) -> f32 {

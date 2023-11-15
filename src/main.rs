@@ -325,6 +325,7 @@ fn draw_sidebar(ui: &mut Ui, app: &mut SplineApp) -> bool {
     ui.add_space(WIDGET_SPACING);
     ui.heading("Curve points");
 
+    params.hovered_point = None;
     let resp = {
         let (id, rect) = ui.allocate_space(Vec2::new(200.0, 4.0));
         let resp = ui.interact(rect, id, Sense::click());
@@ -341,8 +342,10 @@ fn draw_sidebar(ui: &mut Ui, app: &mut SplineApp) -> bool {
         params.control_points.insert(0, pos);
         changed = true;
     }
+    if resp.hovered() {
+        params.hovered_point = Some(0..=0);
+    }
 
-    params.hovered_point = None;
     let mut i = 0;
     while i < params.control_points.len() {
         let p = &mut params.control_points[i];

@@ -65,6 +65,7 @@ impl Default for SplineApp {
             show_acc_vector_on_curve: false,
             show_curvature_circle_on_curve: false,
             adaptive_curvature_color: false,
+            curvature_arc_length: 800.0,
             show_velocity_vector_in_plot: false,
             show_acc_vector_in_plot: false,
             animate: false,
@@ -116,6 +117,7 @@ struct Params {
     show_acc_vector_on_curve: bool,
     show_curvature_circle_on_curve: bool,
     adaptive_curvature_color: bool,
+    curvature_arc_length: f32,
     show_velocity_vector_in_plot: bool,
     show_acc_vector_in_plot: bool,
     animate: bool,
@@ -258,6 +260,14 @@ fn draw_sidebar(ui: &mut Ui, app: &mut SplineApp) -> bool {
         &mut params.adaptive_curvature_color,
         "adaptive curvature color",
     );
+    ui.horizontal(|ui| {
+        ui.add(
+            DragValue::new(&mut params.curvature_arc_length)
+                .speed(1.0)
+                .clamp_range(10.0..=4000.0),
+        );
+        ui.label("curvature arc length");
+    });
 
     ui.add_space(WIDGET_SPACING);
     ui.checkbox(
@@ -769,9 +779,8 @@ fn main_content(ui: &mut Ui, app: &mut SplineApp, mut changed: bool) {
         };
         let stroke = Stroke::new(2.0, color);
 
-        let curvature_arc_length = 800.0;
         if radius.is_infinite() {
-            let l = out.current_velocity.normalized() * 0.5 * curvature_arc_length;
+            let l = out.current_velocity.normalized() * 0.5 * params.curvature_arc_length;
             let start = lerp_point + l;
             let end = lerp_point - l;
             painter.line_segment([start, end], stroke);
@@ -784,7 +793,7 @@ fn main_content(ui: &mut Ui, app: &mut SplineApp, mut changed: bool) {
                 lerp_point,
                 center,
                 signed_radius,
-                curvature_arc_length,
+                params.curvature_arc_length,
                 stroke,
             );
         }

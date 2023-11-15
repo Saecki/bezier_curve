@@ -375,6 +375,17 @@ fn draw_sidebar(ui: &mut Ui, app: &mut SplineApp) -> bool {
                     let layout = Layout::centered_and_justified(egui::Direction::LeftToRight)
                         .with_main_align(Align::RIGHT);
 
+                    // preview positions when dragging
+                    let (mut preview_x, mut temp_y) = (*x, *y);
+                    let (x, y) = match params.drag_delta {
+                        Some(d) => {
+                            preview_x += d.x;
+                            temp_y += d.y;
+                            (&mut preview_x, &mut temp_y)
+                        }
+                        None => (x, y),
+                    };
+
                     ui.allocate_ui_with_layout(coord_size, layout, |ui| {
                         changed |= ui.add(DragValue::new(x).fixed_decimals(1)).changed();
                     });

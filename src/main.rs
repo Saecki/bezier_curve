@@ -7,7 +7,7 @@ use egui::scroll_area::ScrollBarVisibility;
 use egui::{
     Align, Align2, Button, CentralPanel, Color32, DragValue, FontFamily, FontId, Frame, Id, Key,
     Label, LayerId, Layout, Margin, Modifiers, Order, Painter, Pos2, Rect, RichText, Rounding,
-    ScrollArea, Sense, SidePanel, Slider, Stroke, Ui, Vec2,
+    ScrollArea, Sense, Shape, SidePanel, Slider, Stroke, Ui, Vec2,
 };
 use egui_plot::{Arrows, Corner, Legend, Line, Plot, PlotBounds, PlotPoint, PlotPoints, PlotUi};
 use serde_derive::{Deserialize, Serialize};
@@ -22,7 +22,7 @@ const CURVATURE_COLOR: Color32 = Color32::from_rgb(0xFF, 0x50, 0xF0);
 const WIDGET_SPACING: f32 = 8.0;
 
 const CONTROL_POINT_RADIUS: f32 = 10.0;
-const POINT_RADIUS: f32 = 8.0;
+const POINT_RADIUS: f32 = 5.0;
 const VELOCITY_SCALE: f32 = 0.1;
 const ACC_SCALE: f32 = 0.025;
 
@@ -695,23 +695,28 @@ fn main_content(ui: &mut Ui, app: &mut SplineApp, mut changed: bool) {
     // curve
     let curve_stroke = Stroke::new(3.0, Color32::WHITE);
     if !params.animate_curve {
-        for p in out.curve_points.windows(2) {
-            painter.line_segment([p[0], p[1]], curve_stroke);
-        }
+        painter.add(Shape::line(out.curve_points.clone(), curve_stroke));
     } else {
-        for p in out.curve_points[0..=out.animate_curve_idx].windows(2) {
-            painter.line_segment([p[0], p[1]], curve_stroke);
-        }
-        let last_point = out.curve_points[out.animate_curve_idx];
         let lerp_point = out.constructed_point();
-        painter.line_segment([last_point, lerp_point], curve_stroke);
+        let points = out.curve_points[0..=out.animate_curve_idx]
+            .iter()
+            .copied()
+            .chain(std::iter::once(lerp_point))
+            .collect();
+        painter.add(Shape::line(points, curve_stroke));
     }
 
     // control point lines
     if params.show_control_lines {
-        for p in params.control_points.windows(2) {
-            let stroke = Stroke::new(2.0, Color32::BLUE);
-            painter.line_segment([p[0], p[1]], stroke);
+        let stroke = Stroke::new(2.0, Color32::GRAY);
+        painter.add(Shape::line(params.control_points.clone(), stroke));
+    }
+
+    // interpolated lines
+    for points in out.lerp_points.iter() {
+        if params.show_lerp_lines && points.len() > 1 {
+            let stroke = Stroke::new(1.0, Color32::GREEN);
+            painter.add(Shape::line(points.clone(), stroke));
         }
     }
 
@@ -776,13 +781,6 @@ fn main_content(ui: &mut Ui, app: &mut SplineApp, mut changed: bool) {
 
     // interpolated points
     for points in out.lerp_points.iter() {
-        if params.show_lerp_lines {
-            for p in points.windows(2) {
-                let stroke = Stroke::new(1.0, Color32::GREEN);
-                painter.line_segment([p[0], p[1]], stroke);
-            }
-        }
-
         if points.len() == 1 {
             if params.show_last_lerp_point {
                 let color = Color32::from_rgb(0xF0, 0x20, 0xF0);

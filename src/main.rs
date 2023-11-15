@@ -5,8 +5,8 @@ use eframe::{CreationContext, NativeOptions};
 use egui::emath::Rot2;
 use egui::scroll_area::ScrollBarVisibility;
 use egui::{
-    Align2, Button, CentralPanel, Color32, DragValue, FontFamily, FontId, Frame, Id, Key, Label,
-    LayerId, Layout, Margin, Modifiers, Painter, Pos2, Rect, Rounding, ScrollArea, Sense,
+    Align, Align2, Button, CentralPanel, Color32, DragValue, FontFamily, FontId, Frame, Id, Key,
+    Label, LayerId, Layout, Margin, Modifiers, Painter, Pos2, Rect, Rounding, ScrollArea, Sense,
     SidePanel, Slider, Stroke, Ui, Vec2,
 };
 use egui_plot::{Arrows, Corner, Legend, Line, Plot, PlotBounds, PlotPoint, PlotPoints, PlotUi};
@@ -327,7 +327,7 @@ fn draw_sidebar(ui: &mut Ui, app: &mut SplineApp) -> bool {
 
     let resp = {
         let (id, rect) = ui.allocate_space(Vec2::new(200.0, 4.0));
-        let resp = ui.interact(rect, id, Sense::hover());
+        let resp = ui.interact(rect, id, Sense::click());
         if resp.hovered() {
             let painter = ui.painter();
             painter.rect_filled(rect, Rounding::same(2.0), Color32::GRAY);
@@ -345,7 +345,7 @@ fn draw_sidebar(ui: &mut Ui, app: &mut SplineApp) -> bool {
     params.hovered_point = None;
     let mut i = 0;
     while i < params.control_points.len() {
-        let p = &params.control_points[i];
+        let p = &mut params.control_points[i];
 
         let mut removed = false;
         let resp = Frame::none()
@@ -366,18 +366,18 @@ fn draw_sidebar(ui: &mut Ui, app: &mut SplineApp) -> bool {
                         Label::new(format!("{i}")),
                     );
 
-                    ui.add_space(20.0);
-
+                    ui.add_space(10.0);
                     let Pos2 { x, y } = p;
-                    ui.allocate_ui(Vec2::new(50.0, ui.style().spacing.interact_size.y), |ui| {
-                        ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
-                            ui.label(format!("{x:.2}"));
-                        });
+                    let coord_size = Vec2::new(60.0, ui.style().spacing.interact_size.y);
+                    let layout = Layout::centered_and_justified(egui::Direction::LeftToRight)
+                        .with_main_align(Align::RIGHT);
+
+                    ui.allocate_ui_with_layout(coord_size, layout, |ui| {
+                        ui.add(DragValue::new(x).fixed_decimals(1));
                     });
-                    ui.allocate_ui(Vec2::new(50.0, ui.style().spacing.interact_size.y), |ui| {
-                        ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
-                            ui.label(format!("{y:.2}"));
-                        });
+
+                    ui.allocate_ui_with_layout(coord_size, layout, |ui| {
+                        ui.add(DragValue::new(y).fixed_decimals(1));
                     });
                 })
                 .response
@@ -385,19 +385,19 @@ fn draw_sidebar(ui: &mut Ui, app: &mut SplineApp) -> bool {
             .inner;
 
         if resp.hovered() {
+            resp.highlight();
             params.hovered_point = Some(i..=i);
         }
 
         let resp = {
             let (id, rect) = ui.allocate_space(Vec2::new(200.0, 4.0));
-            let resp = ui.interact(rect, id, Sense::hover());
+            let resp = ui.interact(rect, id, Sense::click());
             if resp.hovered() {
                 let painter = ui.painter();
                 painter.rect_filled(rect, Rounding::same(2.0), Color32::GRAY);
             }
             resp
         };
-        let resp = ui.interact(resp.rect, Id::new("add_point").with(i), Sense::click());
         if resp.clicked() {
             if i < params.control_points.len() - 1 {
                 let mid_point = params.control_points[i].lerp(params.control_points[i + 1], 0.5);
@@ -418,7 +418,7 @@ fn draw_sidebar(ui: &mut Ui, app: &mut SplineApp) -> bool {
             }
         }
 
-        if removed {
+        if removed && params.control_points.len() > 3 {
             params.control_points.remove(i);
         } else {
             i += 1;

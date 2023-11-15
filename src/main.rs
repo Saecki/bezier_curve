@@ -376,11 +376,11 @@ fn draw_sidebar(ui: &mut Ui, app: &mut SplineApp) -> bool {
                         .with_main_align(Align::RIGHT);
 
                     ui.allocate_ui_with_layout(coord_size, layout, |ui| {
-                        ui.add(DragValue::new(x).fixed_decimals(1));
+                        changed |= ui.add(DragValue::new(x).fixed_decimals(1)).changed();
                     });
 
                     ui.allocate_ui_with_layout(coord_size, layout, |ui| {
-                        ui.add(DragValue::new(y).fixed_decimals(1));
+                        changed |= ui.add(DragValue::new(y).fixed_decimals(1)).changed();
                     });
                 })
                 .response

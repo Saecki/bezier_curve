@@ -982,13 +982,13 @@ fn compute_position(u: f32, control_points: &[Pos2]) -> Pos2 {
 fn compute_vectors(
     control_points: &[Pos2],
     num_line_segments: u32,
-    fun: fn(f32, &[Pos2]) -> Vec2,
+    compute: fn(f32, &[Pos2]) -> Vec2,
 ) -> Vec<Vec2> {
     let mut line = Vec::new();
     for i in 0..=num_line_segments {
         let u = i as f32 / num_line_segments as f32;
-        let point = fun(u, control_points);
-        line.push(point);
+        let vec = compute(u, control_points);
+        line.push(vec);
     }
     line
 }

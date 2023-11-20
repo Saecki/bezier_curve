@@ -78,7 +78,7 @@ impl Default for SplineApp {
             movement_direction: 1.0,
             u: 0.3,
 
-            drag_delta: None,
+            drag_state: None,
             hovered_point: None,
         };
         let output = compute(&params);
@@ -129,8 +129,31 @@ struct Params {
     movement_direction: f32,
     u: f32,
 
-    drag_delta: Option<Vec2>,
+    #[serde(skip)]
+    drag_state: Option<DragState>,
     hovered_point: Option<RangeInclusive<usize>>,
+}
+
+#[derive(Clone, Debug)]
+struct DragState {
+    locked_axis: Option<Axis>,
+    raw_delta: Vec2,
+}
+
+impl DragState {
+    fn delta(&self) -> Vec2 {
+        match self.locked_axis {
+            Some(Axis::X) => Vec2::new(self.raw_delta.x, 0.0),
+            Some(Axis::Y) => Vec2::new(0.0, self.raw_delta.y),
+            None => self.raw_delta,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Axis {
+    X,
+    Y,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -180,21 +203,38 @@ impl eframe::App for SplineApp {
             }
 
             if i.pointer.is_decidedly_dragging() {
-                self.params.drag_delta = if let (true, Some(origin), Some(pos)) = (
+                if let (true, Some(origin), Some(pos)) = (
                     i.pointer.middle_down(),
                     i.pointer.press_origin(),
                     i.pointer.interact_pos(),
                 ) {
-                    Some(pos - origin)
+                    let raw_delta = pos - origin;
+                    let drag_state = self.params.drag_state.get_or_insert_with(|| DragState {
+                        locked_axis: None,
+                        raw_delta,
+                    });
+
+                    drag_state.raw_delta = raw_delta;
+                    if i.consume_key(Modifiers::NONE, Key::X) {
+                        drag_state.locked_axis = match drag_state.locked_axis {
+                            Some(Axis::X) => None,
+                            Some(Axis::Y) | None => Some(Axis::X),
+                        };
+                    } else if i.consume_key(Modifiers::NONE, Key::Y) {
+                        drag_state.locked_axis = match drag_state.locked_axis {
+                            Some(Axis::Y) => None,
+                            Some(Axis::X) | None => Some(Axis::Y),
+                        };
+                    }
                 } else {
                     // drag released
-                    if let Some(delta) = self.params.drag_delta {
+                    if let Some(drag_state) = &self.params.drag_state {
                         for p in self.params.control_points.iter_mut() {
-                            *p += delta;
+                            *p += drag_state.delta();
                         }
                     }
                     changed = true;
-                    None
+                    self.params.drag_state = None;
                 };
             }
         });
@@ -386,12 +426,13 @@ fn draw_sidebar(ui: &mut Ui, app: &mut SplineApp) -> bool {
                         .with_main_align(Align::RIGHT);
 
                     // preview positions when dragging
-                    let (mut preview_x, mut temp_y) = (*x, *y);
-                    let (x, y) = match params.drag_delta {
-                        Some(d) => {
-                            preview_x += d.x;
-                            temp_y += d.y;
-                            (&mut preview_x, &mut temp_y)
+                    let (mut preview_x, mut preview_y) = (*x, *y);
+                    let (x, y) = match &params.drag_state {
+                        Some(drag_state) => {
+                            let delta = drag_state.delta();
+                            preview_x += delta.x;
+                            preview_y += delta.y;
+                            (&mut preview_x, &mut preview_y)
                         }
                         None => (x, y),
                     };
@@ -707,8 +748,8 @@ fn main_content(ui: &mut Ui, app: &mut SplineApp, mut changed: bool) {
     let out = &app.output;
     let available_rect = Rect::from_min_size(ui.cursor().min, ui.available_size());
     let mut clip_rect = available_rect;
-    if let Some(delta) = params.drag_delta {
-        clip_rect = clip_rect.translate(-delta);
+    if let Some(drag_state) = &params.drag_state {
+        clip_rect = clip_rect.translate(-drag_state.delta());
     }
     let main_layer_id = LayerId::new(Order::Middle, Id::new("main_content"));
     let painter = ui.painter_at(clip_rect).with_layer_id(main_layer_id);
@@ -838,7 +879,8 @@ fn main_content(ui: &mut Ui, app: &mut SplineApp, mut changed: bool) {
         }
     }
 
-    if let Some(delta) = params.drag_delta {
+    if let Some(drag_state) = &params.drag_state {
+        let delta = drag_state.delta();
         ui.ctx().translate_layer(main_layer_id, delta);
 
         // draw translation delta

@@ -540,8 +540,8 @@ fn draw_time_plots(ui: &mut Ui, app: &SplineApp) {
             // cursor
             let current_u = current_u(params, out);
             let points = PlotPoints::Owned(vec![
-                PlotPoint::new(current_u, 0.0),
-                PlotPoint::new(current_u, 1.0),
+                PlotPoint::new(current_u, -0.2),
+                PlotPoint::new(current_u, 1.2),
             ]);
             let cursor = Line::new(points).width(1.5).color(Color32::RED);
             ui.line(cursor);

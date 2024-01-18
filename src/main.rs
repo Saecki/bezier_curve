@@ -351,8 +351,9 @@ fn draw_sidebar(ui: &mut Ui, app: &mut SplineApp) -> bool {
         let resp = ui.add(slider);
         ui.label("u");
 
-        if resp.changed() {
-            params.movement_direction = resp.drag_delta().x.signum();
+        let delta = resp.drag_delta().x;
+        if delta != 0.0 {
+            params.movement_direction = delta.signum();
             changed = true;
         }
     });
